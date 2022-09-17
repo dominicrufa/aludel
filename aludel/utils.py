@@ -1,7 +1,6 @@
 """various utilities"""
-import pickle
 import os
-from typing import Iterable
+from typing import Iterable, Any
 
 
 def compressed_pickle(filename:str, data:Any):
@@ -13,11 +12,14 @@ def compressed_pickle(filename:str, data:Any):
 
 def decompress_pickle(filename:str) -> Any:
   # Load any compressed pickle file
+  import bz2
+  import _pickle as cPickle
   data = bz2.BZ2File(filename, 'rb')
   data = cPickle.load(data)
   return data
 
 def read_pickle(filename:str) -> Any:
+    import pickle
     f = open(filename, 'rb')
     data = pickle.load(f)
     f.close()
@@ -27,7 +29,7 @@ def query_outdirs_from_perses(
     perses_base_dir: str,
     write_to_dir: str,
     outdir_prefix: str='out_',
-    specific_query_dirs = Iterable[str]=[],
+    specific_query_dirs: Iterable[str]=[],
     out_topology_proposal_name: str='out-topology_proposals.pkl'):
     """
     a simple utility to extract the inputs to the `hsg.py` from a canonical
@@ -47,25 +49,25 @@ def query_outdirs_from_perses(
             top_proposal = _data[f"{phase}_topology_proposal"]
             for _key in ['old', 'new']:
                 # positions
-                out_data[phase][f"{_key}_positions"] = /
-                    _data[f"{phase}_{_key}_positions"]
+                out_data[phase][f"{_key}_positions"] = _data[
+                    f"{phase}_{_key}_positions"]
 
                 # unique atoms
-                out_data[phase][f"unique_{_key}_atoms"] = /
-                    getattr(top_proposal, f"_unique_{_key}_atoms")
+                out_data[phase][f"unique_{_key}_atoms"] = getattr(top_proposal,
+                    f"_unique_{_key}_atoms")
 
                 # system
-                out_data[phase][f"{_key}_system"] = /
-                    getattr(top_proposal, f"_{_key}_system")
-            out_data[phase][f"old_to_new_atom_map"] = /
-                top_proposal.old_to_new_atom_map
+                out_data[phase][f"{_key}_system"] = getattr(top_proposal,
+                    f"_{_key}_system")
+            out_data[phase][f"old_to_new_atom_map"] = getattr(top_proposal,
+                'old_to_new_atom_map')
         return out_data
 
     if len(specific_query_dirs) > 0:
         query_dir_iterable = specific_query_dirs
     else:
         query_dir_iterable = []
-        query_dir_iterable_try = [_q for _q in /
+        query_dir_iterable_try = [_q for _q in
             os.listdir(perses_base_dir) if os.path.isdir(
             os.path.join(perses_base_dir, _q))]
         for _dir_iterable in query_dir_iterable_try:
