@@ -90,10 +90,8 @@ def query_indices(indices_to_query: Iterable[int],
             core to both systems
     """
     hybrid_indices = [old_to_hybrid_map[_idx] for _idx in indices_to_query]
-    unique_bools = [True for _idx in indices_to_query if _idx in uniques \
-        else False]
-    core_bools = [True for _idx in indices_to_query if _idx in cores \
-        else False]
+    unique_bools = [_idx in uniques for _idx in indices_to_query]
+    core_bools = [_idx in cores for _idx in indices_to_query]
     return hybrid_indices, unique_bools, core_bools
 
 def translate_standard_valence_force(
@@ -428,8 +426,7 @@ class BaseHybridSystemFactory(object):
             if force_name in allowed_valence_forcenames:
                 old_force = self._old_forces[force_name]
                 new_force = self._new_forces[force_name]
-                static_force, U0_force, U1_force = \ # make the forces
-                    translate_standard_valence_force(
+                static_f, U0_f, U1_f = translate_standard_valence_force(
                     old_force=old_force,
                     new_force=new_force,
                     old_to_hybrid_map=self._old_to_hybrid_map,
@@ -438,9 +435,9 @@ class BaseHybridSystemFactory(object):
                     unique_olds=self._unique_old_atoms,
                     **kwargs)
                 out_force_dict[force_name] = {
-                    'static': static_force,
-                    'U0_static': U0_force,
-                    'U1_static': U1_force}
+                    'static': static_f,
+                    'U0_static': U0_f,
+                    'U1_static': U1_f}
         return out_force_dict
 
     def _make_nonbonded_force(self,
@@ -476,11 +473,11 @@ class BaseHybridSystemFactory(object):
 
         NOTE: in this construction, the
         """
-        offset_default_global_parameters = {key[1:]: value for key, value in /
-            **self._atm_default_global_parameters} # remove `_` in param names
+        offset_default_global_parameters = {key[1:] : value for key, value in
+            self._atm_default_global_parameters} # remove `_` in param names
         energy_expr = self._atm_expression_template.format(
         **offset_default_global_parameters) # register params in place
-        coll_vars = {_key: valence_force_dict[_key] for key in /
+        coll_vars = {_key: valence_force_dict[_key] for key in
             self._atm_collective_variable_names} # make coll vars dict
         # valence forces
         valence_force_dict = _make_valence_forces(**kwargs)
