@@ -199,13 +199,12 @@ def translate_standard_nonbonded_force(
     new_to_hybrid_map: Dict[int, int],
     unique_news: Iterable[int],
     unique_olds: Iterable[int],
-    old_global_parameter_name: str,
-    new_global_parameter_name: str,
-    **kwargs):
+    **kwargs) -> Tuple[openmm.NonbondedForce, openmm.NonbondedForce]:
     """
-    translate a standard nonbonded force into 3 forces.
-    Force 1: NonbondedForce of old system w/ unique news off
-    Force 2: NonbondedForce of new system w/ unique olds off
+    translate a standard nonbonded force into 2 forces
+    Returns:
+        out_old_nbf: out `openmm.NonbondedForce` corresponding to `U0_static`
+        out_new_nbf: out `openmm.NonbondedForce` corresponding to `U1_static`
     """
     out_old_nbf = translate_nonbonded_delimiters(old_nbf, **kwargs)
     out_new_nbf = translate_nonbonded_delimiters(new_nbf, **kwargs)
@@ -291,7 +290,7 @@ class BaseHybridSystemFactory(object):
         unique_new_atoms: Iterable[int],
         unique_old_atoms: Iterable[int],
         atm_expression_template: str=V1_ATM_EXPR_TEMPLATE,
-        atm_collective_variables: Iterable[str]=V1_ATM_COLLECTIVE_VARS,
+        atm_collective_variable_names: Iterable[str]=V1_ATM_COLLECTIVE_VARS,
         atm_default_global_parameters: Dict[str, float]=V1_ATM_DEFAULT_GLOBAL_PARAMS,
         **kwargs):
 
@@ -309,7 +308,7 @@ class BaseHybridSystemFactory(object):
         self._new_to_hybrid_map = {}
 
         self._atm_expression_template = atm_expression_template
-        self._atm_collective_variables = atm_collective_variables
+        self._atm_collective_variable_names = atm_collective_variables
         self._atm_default_global_parameters = atm_default_global_parameters
 
         # now call setup fns
@@ -415,7 +414,8 @@ class BaseHybridSystemFactory(object):
 
     def _make_valence_forces(self, **kwargs):
         """construct static/perturbation valence forces and return a
-        dictionary of such force for each force name
+        dictionary of such force for each force name by calling
+        `translate_standard_valence_force` on each valence force object
         """
         allowed_valence_forcenames = list(VALENCE_FORCE_STATIC_EXPR.keys())
         all_forcenames = list(self._old_forces.keys()) + \
@@ -439,48 +439,73 @@ class BaseHybridSystemFactory(object):
                     **kwargs)
                 out_force_dict[force_name] = {
                     'static': static_force,
-                    'U0': U0_force,
-                    'U1': U1_force}
+                    'U0_static': U0_force,
+                    'U1_static': U1_force}
         return out_force_dict
 
-
-                # make the CustomCVForce
-                # rename the global params simply as the suffixes
-                global_params = {_param_name[1:]: _val for _param_name, _val \
-                    in self._atm_default_global_parameters.items()}
-                energy_fn_expression = self._atm_expression_template.format(
-                    {_param_name: _param_name[1:] for _param_name in \
-                    self._atm_default_global_parameters.keys()}
-                    )
-                collective_vars = {_coll_var: _force for _coll_var, _force \
-                    in zip(self._atm_collective_variables, [U0_force, U1_force])
-                    }
-                cv = make_CustomCVForce(
-                    global_parameters=self._atm_default_global_parameters,
-                    energy_fn_expression=energy_fn_expression,
-                    energy_fn_collective_vars=collective_vars,
-                    **kwargs)
-                # add forces to hybrid
-                self._hybrid_system.addForce(static_force)
-                self._hybrid_system.addForce(cv)
-            else:
-                pass # since it is not a valence force.
-
-    def _equip_nonbonded_forces(self, **kwargs):
-        """construct a
+    def _make_nonbonded_force(self,
+        nonbondedforce_name: str='NonbondedForce',
+        **kwargs):
+        """construct U0 and U1 nonbondedforces to equip to a CustomCVForce
+        by calling `translate_standard_nonbonded_force`
         """
-
-
-
-
-
-
-
-
-
+        nbf_dict = {'old': None, 'new': None}
+        for nbf_gather_key in nbf_dict.keys():
+            query_forces = getattr(self, f"_{nbf_gather_key}_forces")
+            query_forcenames = query_forces.keys()
+            if nonbondedforce_name in query_keys:
+                nbf_dict[nbf_gather_key] = query_forces[nonbondedforce_name]
+            else:
+                raise Exception(f"_{nbf_gather_key}_forces does not contain \
+                forcename {nonbondedforce_name}")
+        U0_nbf, U1_nbf = translate_standard_nonbonded_force(
+            old_nbf = nbf_dict['old'],
+            new_nbf = nbf_dict['new'],
+            old_to_hybrid_map = self._old_to_hybrid_map,
+            new_to_hybrid_map = self._new_to_hybrid_map,
+            unique_news = self._unique_new_atoms,
+            unique_olds = self._unique_old_atoms,
+            **kwargs)
+        return U0_nbf, U1_nbf
 
     def _build_hybrid_system_forces(self, **kwargs):
-        """construct the hybrid system by looping over the allowable forces
-        and calling appropriate translation mechanisms"""
-        for force_name in self._allowed_force_names:
-            hybrid_force =
+        """
+        This function constructs the finalized `hybrid_system` by calling
+        `_make_valence_forces` and `_make_nonbonded_force` and equipping the
+        force objects into a `CustomCVForce`.
+
+        NOTE: in this construction, the
+        """
+        offset_default_global_parameters = {key[1:]: value for key, value in /
+            **self._atm_default_global_parameters} # remove `_` in param names
+        energy_expr = self._atm_expression_template.format(
+        **offset_default_global_parameters) # register params in place
+        coll_vars = {_key: valence_force_dict[_key] for key in /
+            self._atm_collective_variable_names} # make coll vars dict
+        # valence forces
+        valence_force_dict = _make_valence_forces(**kwargs)
+        for valence_force_name, valence_force_dict in valence_force.items():
+            # first, equip the static valence force
+            self._hybrid_system.addForce(
+                copy.deepcopy(valence_force_dict['static']))
+
+            # then construct and equip CustomCVForce
+            cv = make_CustomCVForce(
+                global_parameters = self._atm_default_global_parameters,
+                energy_fn_expression = energy_expr,
+                energy_fn_collective_vars = coll_vars,
+                **kwargs)
+            self._hybrid_system.addForce(cv)
+
+        # NonbondedForce
+        U0_nbf, U1_nbf = _make_nonbonded_force(**kwargs)
+        nbf_cv = make_CustomCVForce(
+            global_parameters = self._atm_default_global_parameters,
+            energy_fn_expression = energy_expr,
+            energy_fn_collective_vars = coll_vars,
+            **kwargs)
+        self._hybrid_system.addForce(nbf_cv)
+
+    @property
+    def hybrid_system(self):
+        return copy.deepcopy(self._hybrid_system)
