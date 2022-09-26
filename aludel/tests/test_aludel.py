@@ -9,6 +9,7 @@ import numpy as np
 from typing import Any, Tuple, Dict, Iterable, Callable
 # from aludel import hsg
 from aludel.utils import decompress_pickle
+from aludel.hsg import *
 
 DEFAULT_ATOL = 1e-2
 DEFAULT_RTOL = 1e-6
