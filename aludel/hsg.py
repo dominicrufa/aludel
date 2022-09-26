@@ -346,12 +346,20 @@ def translate_standard_nonbonded_force(
             new_particle_idx = hybrid_to_new_map[hybrid_idx]
         except:
             new_particle_idx = -1
-        if new_particle_idx >=0: # it is mapped; make offset
+        if new_particle_idx >=0: # it is mapped;
+            # decide whether to add offset.
             new_params = new_nbf.getParticleParameters(new_particle_idx)
+            _old_params = params_as_unitless(old_params)
+            _new_params = params_as_unitless(new_params)
             _scales = [_new - _old for _old, _new in
-                zip(params_as_unitless(old_params), params_as_unitless(new_params))]
-            _ = U_static.addParticleParameterOffset(
-                particle_offset_gp, hybrid_idx, *_scales)
+                zip(_old_params, _new_params)]
+            if not np.allclose(_old_params, _new_params):
+                _ = U_static.addParticleParameterOffset(
+                    particle_offset_gp, hybrid_idx, *_scales)
+            else: # old params are same as new params for particle
+                # we have already added the old params, so pass
+                pass
+
         else:
             assert old_idx in unique_old_atoms
 
