@@ -3,7 +3,7 @@ it makes me sad"""
 
 import openmm
 from openmm import app, unit
-import numpy
+import numpy as np
 import copy
 from typing import Any, Tuple, Dict, Iterable, Callable
 
