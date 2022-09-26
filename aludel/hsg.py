@@ -8,34 +8,44 @@ import copy
 from typing import Any, Tuple, Dict, Iterable, Callable
 
 # define basic alchemical transfer expression
-V1_ATM_EXPR_TEMPLATE = """
-(({_lambda2} - {_lambda1})/{_alpha}) * log_term + {_lambda2}*u_sc + {_w0};
-log_term = log_c + log(exp(0-c) + exp(exponand-c);
-c = max(0, exponand);
-exponand = -{_alpha}*(u_sc - {_u0});
-u_sc = select(soften_bool, u_soft, u);
-soften_bool = step(u - {_u_cut});
-u_soft = ({_u_max} - {_u_cut}) * f_sc + {_u_cut};
-f_sc = (z_y^{_a} - 1)/(z_y^{_a} + 1);
-z_y = 1 + 2*y_by_a + 2*(y_by_a^2);
-y_by_a = y / {_a};
-y = (u - {_u_cut}) / ({_u_max} - {_u_cut});
-u = U1 - U0;
-U1 = select(past_half, U0_static, U1_static);
-U0 = select(past_half, U1_static, U0_static);
-past_half = step({_time} - 0.5);
-"""
-V1_ATM_COLLECTIVE_VARS = ['U0_static', 'U1_static']
+
+V1_ATM_EXPR_TEMPLATE = [
+'U0 + (({lambda2} - {lambda1})/{alpha}) * log_term + {lambda2}*u_sc + {w0};',
+'log_term = c + log(exp(-c) + exp(exponand-c));',
+'c = max(0, exponand);',
+'exponand = -{alpha}*(u_sc - {u0});',
+'u_sc = select(soften_bool, u_soft, u);',
+'soften_bool = step(u - {u_cut});',
+'u_soft = ({u_max} - {u_cut}) * f_sc + {u_cut};',
+'f_sc = (z_y^{a} - 1)/(z_y^{a} + 1);',
+'z_y = 1 + 2*y_by_a + 2*(y_by_a^2);',
+'y_by_a = y / {a};',
+'y = (u - {u_cut}) / ({u_max} - {u_cut});',
+'u = U1 - U0;',
+'U1 = select(past_half, U0_static, U1_static);',
+'U0 = select(past_half, U1_static, U0_static);',
+'past_half = step({time} - 0.5);'
+]
+
+# # overwrite
+# V1_ATM_EXPR_TEMPLATE = [
+#     'U1_static;',
+# ]
+
+V1_ATM_EXPR = ''.join(V1_ATM_EXPR_TEMPLATE)
+
+ATM_COLLECTIVE_VARS = ['U0_static', 'U1_static']
+
 V1_ATM_DEFAULT_GLOBAL_PARAMS = {
-'_time': 0.,
-'_lambda1': 0.,
-'_lambda2': 0.,
-'_alpha': 0.1,
-'_u_cut': 110., # check this again in comparison to `_u0`
-'_u0': 100.,
-'_u_max': 200.,
-'_a': 0.0625,
-'_w0': 0.,
+'time': 0.,
+'lambda1': 0.,
+'lambda2': 0.,
+'alpha': 0.1,
+'u_cut': 200., # check this again in comparison to `_u0`
+'u0': 100.,
+'u_max': 400.,
+'a': 0.0625,
+'w0': 0.,
 }
 
 
@@ -48,6 +58,7 @@ VALENCE_FORCE_STATIC_EXPR = {
     'standard_force_obj': openmm.HarmonicBondForce,
     'get_param_particle_indices': 2,
     'parameter_setter_fn': 'setBondParameters',
+    'num_parameters': 2,
     },
 'HarmonicAngleForce': {
     'standard_add_term_expr': 'addAngle',
@@ -55,7 +66,8 @@ VALENCE_FORCE_STATIC_EXPR = {
     'query_params_expr': 'getAngleParameters',
     'standard_force_obj': openmm.HarmonicAngleForce,
     'get_param_particle_indices': 3,
-    'parameter_setter_fn': 'setAngleParameters'
+    'parameter_setter_fn': 'setAngleParameters',
+    'num_parameters': 2,
     },
 'PeriodicTorsionForce': {
     'standard_add_term_expr': 'addTorsion',
@@ -64,74 +76,37 @@ VALENCE_FORCE_STATIC_EXPR = {
     'standard_force_obj': openmm.PeriodicTorsionForce,
     'get_param_particle_indices': 4,
     'parameter_setter_fn': 'setTorsionParameters',
+    'num_parameters': 3,
     }
 }
 
 
 # utilities
-def query_indices(indices_to_query: Iterable[int],
-                  to_hybrid_map: Dict[int, int],
-                  uniques: Iterable[int],
-                  mapped: Iterable[int]
-                  ) -> Tuple[Iterable[int], Iterable[bool], Iterable[bool]]:
-    """
-    utility fn used primarily for `translate_standard_valence_force` below;
-    Arguments:
-        indices_to_query: an iterable of integer indices of old/new particle
-            indices
-        to_hybrid_map: a dict of old/new to hybrid indices
-        uniques: an iterable of integer indices of old/new particle indices that are not mapped
-        mapped: an iterable of integer indices of old/new particles indices that are mapped
 
-    Returns:
-        hybrid_indices: hybrid indices corresponding to `indices_to_query`
-        unique_bools: iterable of bools of whether the given indices are
-            unique to the system
-        mapped_bools: iterable of bools of whether the given indices are
-            mapped to both systems
-    """
-    hybrid_indices = [to_hybrid_map[_idx] for _idx in indices_to_query]
-    unique_bools = [_idx in uniques for _idx in indices_to_query]
-    mapped_bools = [_idx in mapped for _idx in indices_to_query]
-    return hybrid_indices, unique_bools, mapped_bools
+def translate_standard_valence_force(
+    old_force: openmm.Force,
+    new_force: openmm.Force,
+    old_to_hybrid_map: Iterable[int],
+    new_to_hybrid_map: Iterable[int],
+    unique_old_atoms: Iterable[int],
+    unique_new_atoms: Iterable[int],
+    **kwargs) -> Tuple[openmm.Force, openmm.Force, Dict[str, Iterable[int]]]:
+    """translate a standard valence force; will return:
+        1. the translated old/new forces (U0_static/U1_static)
+        2. a dict of keys ['U0_static', 'U1_static']
+            containing the (artificial) indices of terms that were added to
+            the output valence forces to retain valence forces on unique
+            old/new terms. This is primarily used for bookkeeping purposes
 
-def are_static_valence_terms(terms_1: Iterable,
-                             terms_2: Iterable,
-                             **unused_kwargs) -> bool:
-    """given an iterable of valence terms (either floats, unit'd term, or int),
-       return whether all terms are static
+    we will also bookkeep
+    1. a running tally of the term indices for each out force for
+        `artificial_terms`; i.e., terms that are added as static because they
+        exist containing a `unique` particle in the opposite force.
     """
-    are_static = True
-    for _term1, _term2 in zip(terms_1, terms_2):
-        term1_type, term2_type = type(_term1), type(_term2)
-        assert term1_type == term2_type, f"""
-        term 1 is of type {term1_type} but term 2 is of
-        type {term2_type}"""
-        if type(_term1) in [float, int]:
-            if not np.isclose(_term1, _term2):
-                are_static = False
-                break
-        elif type(_term1) == openmm.unit.quantity.Quantity:
-            assert _term1.unit == _term2.unit, f"""
-            term 1 has units of {_term1.unit} but term 2 has units of
-            {_term2.unit}"""
-            if not np.isclose(_term1.value_in_unit_system(unit.md_unit_system),
-                             _term2.value_in_unit_system(unit.md_unit_system)):
-                are_static = False
-                break
-    return are_static
-
-def translate_standard_valence_force(old_force: openmm.Force,
-                                     new_force: openmm.Force,
-                                     old_to_hybrid_map: Iterable[int],
-                                     new_to_hybrid_map: Iterable[int],
-                                     unique_old_atoms: Iterable[int],
-                                     unique_new_atoms: Iterable[int],
-                                     **kwargs):
-    """translate a standard valence force"""
     old_forcename = old_force.__class__.__name__
     new_forcename = new_force.__class__.__name__
     unique_term_indices = {'old': [], 'new': []} # bookkeep unique terms
+    core_terms = {}
 
     force_util_dict = VALENCE_FORCE_STATIC_EXPR[old_forcename] # get utility dict
     num_particles_per_term = force_util_dict['get_param_particle_indices']
@@ -139,6 +114,7 @@ def translate_standard_valence_force(old_force: openmm.Force,
     old force {old_forcename} doesn't match new force {new_forcename}
     """
     U0_force, U1_force = copy.deepcopy(old_force), copy.deepcopy(new_force)
+
     # now we just need to convert these to hybrid indices and document the unique terms
     for out_force, force_label in zip([U0_force, U1_force], ['old', 'new']):
         num_terms = getattr(out_force,
@@ -159,13 +135,16 @@ def translate_standard_valence_force(old_force: openmm.Force,
             parameter_setter_fn(term_idx, *hybrid_indices, *per_term_parameters)
 
     # finally, query through the unique term indices and add the term to the
-    # opposite force
+    # opposite force; we want to track these so we can energy bookkeep afterward.
+    artifical_terms = {'U0_static': [], 'U1_static': []}
     for unique_label, term_indices in unique_term_indices.items():
         out_force = new_force if unique_label=='old' else old_force
         query_force = old_force if unique_label=='old' else new_force
         write_force = U1_force if unique_label=='old' else U0_force
         query_params_fn = getattr(query_force,
                         force_util_dict['query_params_expr'])
+        artificial_term_iterable = artifical_terms['U1_static'] if unique_label=='old' \
+            else artifical_terms['U0_static']
         to_hybrid_map = old_to_hybrid_map if unique_label == 'old' else new_to_hybrid_map
         term_add_fn = getattr(write_force,
                               force_util_dict['standard_add_term_expr'])
@@ -174,9 +153,28 @@ def translate_standard_valence_force(old_force: openmm.Force,
             particles = all_parameters[:num_particles_per_term]
             per_term_parameters = all_parameters[num_particles_per_term:]
             hybrid_indices = [to_hybrid_map[_idx] for _idx in particles]
-            term_add_fn(*hybrid_indices, *per_term_parameters)
+            artificial_term = term_add_fn(*hybrid_indices, *per_term_parameters)
+            artificial_term_iterable.append(artificial_term)
 
-    return U0_force, U1_force, unique_term_indices
+    return U0_force, U1_force, artifical_terms
+
+def sort_indices_to_str(indices: Iterable[int]) -> str:
+    sorted_indices = sorted(indices)
+    return '.'.join([str(_q) for _q in sorted_indices])
+
+def params_as_unitless(parameters: Iterable) -> Iterable:
+    _out = [_val.value_in_unit_system(unit.md_unit_system) \
+               for _val in parameters]
+    return _out
+
+def make_exception_param_from_particles(_force_to_query, particles):
+    p1_particle_params = params_as_unitless(_force_to_query.getParticleParameters(particles[0]))
+    p2_particle_params = params_as_unitless(_force_to_query.getParticleParameters(particles[1]))
+    cp = p1_particle_params[0] * p2_particle_params[0]
+    s = (p1_particle_params[1] + p2_particle_params[1])/2.
+    e = np.sqrt(p1_particle_params[2]*p2_particle_params[2])
+    return cp, s, e
+
 
 def translate_standard_nonbonded_force(
     old_nbf: openmm.NonbondedForce,
@@ -184,15 +182,58 @@ def translate_standard_nonbonded_force(
     num_hybrid_particles: int,
     old_to_hybrid_map: Dict[int, int],
     new_to_hybrid_map: Dict[int, int],
-    unique_new_atoms: Iterable[int],
     unique_old_atoms: Iterable[int],
-    treat_exceptions_like_valence: bool=True,
+    unique_new_atoms: Iterable[int],
+    unique_old_exc_offset_gp: str,
+    unique_new_exc_offset_gp: str,
+    exc_offset_gp: str,
+    particle_offset_gp: str,
     **kwargs) -> Tuple[openmm.NonbondedForce, openmm.NonbondedForce]:
     """
-    translate a standard nonbonded force
+    translate an old/new standard nonbonded force into a PME-treated
+    `U0_static`, `U1_static` for ATM RBFEs.
+    NOTE: this method effectively translates `old_nbf` and `new_nbf`
+        to hybrid indices whilst retaining nonbonded exceptions
+        associated with `unique` new and old atoms since these are
+        considered "valence" terms that should be immutable.
+    Arguments:
+        old_nbf: old `openmm.NonbondedForce`
+        new_nbf: new `openmm.NonbondedForce`
+        num_hybrid_particles: number of particles in the hybrid system
+        old_to_hybrid_map: dictionary mapping old particles to
+            hybrid indices
+        new_to_hybrid_map: dictionary of mapping new particles to
+            hybrid indices
+        unique_old_atoms: old particle indices that only exist
+            in old system
+        unique_new_atoms: new particle indices that only exist
+            in new system
+        unique_old_exc_offset_gp: global param name that turns on (1.)
+            or off (0.) nonbonded exceptions associated with the unique
+            old atoms
+        unique_new_exc_offset_gp: global param name that turns on (1.)
+            or off (0.) nonbonded exceptions associated with the unique
+            new atoms
+        exc_offset_gp: global param that translates mapped exceptions
+            from `old_nbf` to `new_nbf` from 0. to 1., respectively
+        particle_offset_gp: global param that translates mapped particle
+            indices from `old_nbf` to `new_nbf` from 0. to 1.,
+            respectively
+    Returns
+        U0_static: `openmm.NonbondedForce` representing `old_nbf`
+            translated to hybrid indices and containing exceptions
+            associated with `unique_new_atoms`
+        U1_static: `openmm.NonbondedForce` representing `new_nbf`
+            translated to hybrid_indices and containing exceptions
+            associated with `unique_old_atoms`
     """
-    U0_static = copy.deepcopy(old_nbf)
-    U1_static = copy.deepcopy(new_nbf)
+
+    # make U_static and add global parameters
+    U_static = copy.deepcopy(old_nbf)
+    for gp in [unique_old_exc_offset_gp, unique_new_exc_offset_gp]:
+        U_static.addGlobalParameter(gp, 1.)
+    for gp in [exc_offset_gp, particle_offset_gp]:
+        U_static.addGlobalParameter(gp, 0.)
     num_old_particles = old_nbf.getNumParticles()
     num_new_particles = new_nbf.getNumParticles()
     assert all([key==val for key, val in old_to_hybrid_map.items()]), \
@@ -202,65 +243,171 @@ def translate_standard_nonbonded_force(
     hybrid_to_old_map = {val:key for key, val in old_to_hybrid_map.items()}
     hybrid_to_new_map = {val:key for key, val in new_to_hybrid_map.items()}
 
-    # handle particle parameters
+    # add extra particles
+    particle_difference = num_hybrid_particles - num_old_particles
+    [U_static.addParticle(0.,0.,0.) for _ in range(particle_difference)]
 
-    # add appropriate number of unique particles
-    for _ in range(len(unique_old_atoms)):
-        _ = U1_static.addParticle(0., 0., 0.)
-    assert U1_static.getNumParticles() == num_hybrid_particles
-    for _ in range(len(unique_new_atoms)):
-        _ = U0_static.addParticle(0., 0., 0.)
-    assert U0_static.getNumParticles() == num_hybrid_particles
+    # first thing to do is gather all of the nonbonded exceptions
+    exception_data = {}
+    for orig_force in [old_nbf, new_nbf]:
+        exception_data[orig_force] = {}
+        num_exceptions = orig_force.getNumExceptions()
+        to_hybrid_map = old_to_hybrid_map if orig_force == old_nbf \
+            else new_to_hybrid_map
+        for orig_exception_idx in range(num_exceptions):
+            _params = orig_force.getExceptionParameters(orig_exception_idx)
+            orig_indices = _params[:2]
+            hybrid_indices = [to_hybrid_map[_q] for _q in orig_indices]
+            sorted_hybrid_inds_str = sort_indices_to_str(hybrid_indices)
+            exception_data[orig_force][sorted_hybrid_inds_str] = orig_exception_idx
 
-    # iterate over all old/hybrid indices
-    for old_idx, hybrid_idx in old_to_hybrid_map.items():
+    # now, iterate through the exceptions
+    for _force in [old_nbf, new_nbf]:
+        num_exceptions = _force.getNumExceptions()
+        opp_force = old_nbf if _force == new_nbf else new_nbf
+        to_hybrid_map = old_to_hybrid_map if _force == old_nbf \
+            else new_to_hybrid_map
+        to_opposite_orig_map = hybrid_to_new_map if _force == old_nbf \
+            else hybrid_to_old_map
+        opp_exc_dict_to_query = exception_data[new_nbf] if \
+            _force == old_nbf else exception_data[old_nbf]
+        uniques = unique_old_atoms if _force == old_nbf \
+            else unique_new_atoms
+        unique_param_offset_gp = unique_old_exc_offset_gp \
+            if _force == old_nbf else unique_new_exc_offset_gp
+        for orig_exc_idx in range(num_exceptions):
+            orig_exc_params = _force.getExceptionParameters(orig_exc_idx)
+            orig_indices = orig_exc_params[:2]
+            orig_nonidx_params = params_as_unitless(orig_exc_params[2:])
+            hybrid_inds = [to_hybrid_map[_q] for _q in orig_indices]
+            sorted_hybrid_inds_str = sort_indices_to_str(hybrid_inds)
+            contains_unique = len(
+                    set(orig_indices).intersection(set(uniques))) > 0
+            try: # get the exception from the opposite system
+                opp_exc_idx = opp_exc_dict_to_query[sorted_hybrid_inds_str]
+            except Exception as e: # the exception idx doesn't exist;
+                opp_exc_idx = -1
+            if opp_exc_idx == -1:
+                # that means the particles included are unique or the
+                # exception is simply not in the opposing system
+                if contains_unique:
+                    # zero the params and make an offset for unique news
+                    new_exc_idx = U_static.addException(*hybrid_inds,
+                        0., 0., 0., replace=True)
+                    new_exc_offset_idx = U_static.addExceptionParameterOffset(
+                        unique_param_offset_gp, new_exc_idx, *orig_nonidx_params)
+                else:
+                    raise Exception(f"""this is not well-tested;
+                        reconsider your mapping, please.""")
+                    # the opposite params must be queried from particle params
+                    opp_particle_indices = [to_opposite_orig_map[_q] for
+                                            _q in hybrid_inds]
+                    cp, s, e = make_exception_param_from_particles(opp_force,
+                                                                   opp_particle_indices)
+                    _scales = [_new - _old for _old, _new in zip(orig_nonidx_params,
+                                                                [cp, s, e])]
+                    new_exc_offset_idx = U_static.addExceptionParameterOffset(
+                        exc_offet_gp, orig_exc_idx, _scales)
+            else: # this means that the exception _is_
+                # mapped in the opposite system
+                # only write the offset for the first iter in the for (old_nbf)
+                # and if the the parameters are not the same (otherwise it would
+                # be redundant.)
+                opposite_parameters = params_as_unitless(
+                        opp_force.getExceptionParameters(opp_exc_idx)[2:])
+                if _force == old_nbf and not np.allclose(
+                    orig_nonidx_params, opposite_parameters):
+                    opposite_parameters = params_as_unitless(
+                        opp_force.getExceptionParameters(opp_exc_idx)[2:])
+                    _scales = [_new - _old for _old, _new in zip(orig_nonidx_params,
+                                                                opposite_parameters)]
+                    new_exc_offset_idx = U_static.addExceptionParameterOffset(
+                        exc_offset_gp, orig_exc_idx, *_scales)
+
+    # then add exceptions between all unique new/old
+    for unique_new_idx in unique_new_atoms:
+        unique_new_hybr_idx = new_to_hybrid_map[unique_new_idx]
+        for unique_old_idx in unique_old_atoms:
+            unique_old_hybrid_idx = old_to_hybrid_map[unique_old_idx]
+            _ = U_static.addException(unique_old_hybrid_idx,
+                unique_new_hybr_idx, 0., 0., 0.)
+
+    # exceptions are handled
+    # iterate over particles...
+    for old_idx, hybrid_idx in old_to_hybrid_map.items(): # redundant
         # this is redundant because of first assert statement
         old_params = old_nbf.getParticleParameters(old_idx)
-        U0_static.setParticleParameters(hybrid_idx, *old_params)
-    for new_idx, hybrid_idx in new_to_hybrid_map.items():
+        U_static.setParticleParameters(hybrid_idx, *old_params)
+        if old_idx in unique_old_atoms: # create an offset
+            _scales = [-1*_i for _i in params_as_unitless(old_params)]
+            _ = U_static.addParticleParameterOffset(
+                particle_offset_gp, hybrid_idx, *_scales)
+        try:
+            new_particle_idx = hybrid_to_new_map[hybrid_idx]
+        except:
+            new_particle_idx = -1
+        if new_particle_idx >=0: # it is mapped; make offset
+            new_params = new_nbf.getParticleParameters(new_particle_idx)
+            _scales = [_new - _old for _old, _new in
+                zip(params_as_unitless(old_params), params_as_unitless(new_params))]
+            _ = U_static.addParticleParameterOffset(
+                particle_offset_gp, hybrid_idx, *_scales)
+        else:
+            assert old_idx in unique_old_atoms
+
+    for new_idx in unique_new_atoms:
         new_params = new_nbf.getParticleParameters(new_idx)
-        U1_static.setParticleParameters(hybrid_idx, *new_params)
+        hybrid_idx = new_to_hybrid_map[new_idx]
+        _ = U_static.addParticleParameterOffset(
+            particle_offset_gp, hybrid_idx, *new_params)
 
-    # iterate over particle exception parameters;
-    # do we need the same number of exceptions in each?
-    static_exception_indices = {'U0_static': [], 'U1_static': []}
-    for force, to_hybrid_map in zip([old_nbf, new_nbf],
-        [old_to_hybrid_map, new_to_hybrid_map]):
-        num_exceptions = force.getNumExceptions()
-        for exception_idx in range(num_exceptions):
-            p1, p2, cp, s, e = force.getExceptionParameters(exception_idx)
-            hybr_p1, hybr_p2 = to_hybrid_map[p1], to_hybrid_map[p2]
-            force.setExceptionParameters(exception_idx, hybr_p1, hybr_p2,
-                                        cp, s, e)
+    # now pull it all together
+    U0_static = copy.deepcopy(U_static)
+    U1_static = copy.deepcopy(U_static)
 
-            if treat_exceptions_like_valence:
-                write_to_force = U1_static if force == old_nbf \
-                    else U0_static
-                write_to_key = 'U1_static' if force == old_nbf \
-                    else 'U0_static'
-                uniques = unique_old_atoms if force == old_nbf else \
-                    unique_new_atoms
-                includes_unique = any([_p in uniques for _p in [p1, p2]])
-                if includes_unique:
-                    static_exception_idx = write_to_force.addException(
-                        hybr_p1, hybr_p2, cp, s, e, replace=True)
-                    static_exception_indices[write_to_key].append(
-                        static_exception_idx)
-    return U0_static, U1_static, static_exception_indices
+    for gp_idx in range(U0_static.getNumGlobalParameters()):
+        gp_name = U0_static.getGlobalParameterName(gp_idx)
+        gp_val = U0_static.getGlobalParameterDefaultValue(gp_idx)
+        if np.isclose(gp_val, 0.): # then U1_static gets turned to 1
+            U1_static.setGlobalParameterDefaultValue(gp_idx, 1.)
+        U0_static.setGlobalParameterName(gp_idx, f"U0_static_" + gp_name)
+        U1_static.setGlobalParameterName(gp_idx, f"U1_static_" + gp_name)
+    return U0_static, U1_static
 
+def get_hybrid_positions(old_positions: unit.Quantity,
+                         new_positions: unit.Quantity,
+                         num_hybrid_particles: int,
+                         old_to_hybrid_map: Dict[int, int],
+                         new_to_hybrid_map: Dict[int, int],
+                         mapped_positions_on_old: bool=False,
+                         **unused_kwargs) -> unit.Quantity:
+    """get hybrid positions from old/new positions; `openmm`-amenable;
+    `mapped_positions_on_old` will write mapped positions to the old particle indices;
+    otherwise, will map to new."""
+    hybrid_positions = np.zeros((num_hybrid_particles, 3))
+    old_pos_sans_units = old_positions.value_in_unit_system(unit.md_unit_system)
+    new_pos_sans_units = new_positions.value_in_unit_system(unit.md_unit_system)
+    to_hybrid_maps = [old_to_hybrid_map, new_to_hybrid_map]
+    from_position_cache = [old_pos_sans_units, new_pos_sans_units]
+    if mapped_positions_on_old:
+        to_hybrid_maps = to_hybrid_maps[::-1]
+        from_position_cache = from_position_cache[::-1]
 
+    for to_hybrid_map, from_positions in zip(to_hybrid_maps, from_position_cache):
+        for orig_idx, hybrid_idx in to_hybrid_map.items():
+            hybrid_positions[hybrid_idx,:] = from_positions[orig_idx,:]
+    return hybrid_positions * unit.nanometers
 
 def make_CustomCVForce(
     global_parameters: Dict[str, float],
     energy_fn_expression: str,
     energy_fn_collective_vars: Dict[float, openmm.Force],
     **unused_kwargs):
-    cv = openmm.CustomCVForce('')
-    for param_name, param_value in global_parameters.items():
-        cv.addGlobalParameter(param_name, param_value)
+    cv = openmm.CustomCVForce(energy_fn_expression)
     for energy_fn, force in energy_fn_collective_vars.items():
         cv.addCollectiveVariable(energy_fn, copy.deepcopy(force))
-    cv.setEnergyFunction(energy_fn_expression)
+    for param_name, param_value in global_parameters.items():
+        cv.addGlobalParameter(param_name, param_value)
     return cv
 
 class BaseHybridSystemFactory(object):
@@ -280,9 +427,12 @@ class BaseHybridSystemFactory(object):
         old_to_new_atom_map: Dict[int, int],
         unique_new_atoms: Iterable[int],
         unique_old_atoms: Iterable[int],
-        atm_expression_template: str=V1_ATM_EXPR_TEMPLATE,
-        atm_collective_variable_names: Iterable[str]=V1_ATM_COLLECTIVE_VARS,
+        atm_expression_template: str=V1_ATM_EXPR,
         atm_default_global_parameters: Dict[str, float]=V1_ATM_DEFAULT_GLOBAL_PARAMS,
+        nbf_unique_old_exc_offset_gp: str='nbf_unique_old_exc_offset_gp',
+        nbf_unique_new_exc_offset_gp: str='nbf_unique_new_exc_offset_gp',
+        nbf_exc_offset_gp: str='nbf_exc_offset_gp',
+        nbf_particle_offset_gp: str='nbf_particle_offset_gp',
         **kwargs):
 
         self._old_system = copy.deepcopy(old_system)
@@ -296,19 +446,26 @@ class BaseHybridSystemFactory(object):
         self._hybrid_system = openmm.System()
 
         self._atm_expression_template = atm_expression_template
-        self._atm_collective_variable_names = atm_collective_variable_names
+        self._atm_collective_variable_names = ATM_COLLECTIVE_VARS
         self._atm_default_global_parameters = atm_default_global_parameters
+
+        self._nbf_unique_old_exc_offset_gp = nbf_unique_old_exc_offset_gp
+        self._nbf_unique_new_exc_offset_gp = nbf_unique_new_exc_offset_gp
+        self._nbf_exc_offset_gp = nbf_exc_offset_gp
+        self._nbf_particle_offset_gp = nbf_particle_offset_gp
 
         # now call setup fns
         self._add_particles_to_hybrid(**kwargs)
         self._get_force_dicts(**kwargs) # render force dicts for new/old sys
         self._assert_allowable_forces(**kwargs)
-        self._copy_barostat(**kwargs) # copy barostat
         self._copy_box_vectors(**kwargs) # copy box vectors
         self._handle_constraints(**kwargs)
         self._handle_virtual_sites(**kwargs)
         self._equip_valence_forces(**kwargs)
-#         self._equip_nonbonded_force(**kwargs)
+        self._equip_nonbonded_force(**kwargs)
+
+        if self._hybrid_system.usesPeriodicBoundaryConditions():
+            self._copy_barostat(**kwargs) # copy barostat
 
 
     def _get_force_dicts(self, **unused_kwargs):
@@ -383,11 +540,12 @@ class BaseHybridSystemFactory(object):
         self._new_to_hybrid_map = {}
 
         old_num_particles = self._old_system.getNumParticles()
+        new_num_particles = self._new_system.getNumParticles()
         for idx in range(old_num_particles): # iterate over old particles
             mass_old = self._old_system.getParticleMass(idx)
             if idx in self._old_to_new_atom_map.keys():
                 idx_in_new_sys = self._old_to_new_atom_map[idx]
-                mass_new = self._new_system.getParticleMass(idx)
+                mass_new = self._new_system.getParticleMass(idx_in_new_sys)
                 mix_mass = (mass_old + mass_new) / 2
             else:
                 mix_mass = mass_old
@@ -446,7 +604,7 @@ class BaseHybridSystemFactory(object):
             if force_name in allowed_valence_forcenames:
                 old_force = self._old_forces[force_name]
                 new_force = self._new_forces[force_name]
-                U0_f, U1_f, static_term_dict = translate_standard_valence_force(
+                U0_f, U1_f, artifical_terms = translate_standard_valence_force(
                     old_force=old_force,
                     new_force=new_force,
                     old_to_hybrid_map=self._old_to_hybrid_map,
@@ -457,24 +615,24 @@ class BaseHybridSystemFactory(object):
                 out_force_dict[force_name] = {
                     'U0_static': U0_f,
                     'U1_static': U1_f,
-                    'static_term_dict': static_term_dict}
+                    'artificial_term_dict': artifical_terms}
         return out_force_dict
 
     def _equip_valence_forces(self, **kwargs):
         """make `openmm.CustomCVForce` for valence forces and equip
         to `self._hybrid_system`"""
-        offset_default_global_parameter_names = {key : key[1:] for key in
-            self._atm_default_global_parameters.keys()} # remove `_` in param names
+        atm_global_param_names = {key: key for key in
+                                  self._atm_default_global_parameters.keys()}
         energy_expr = self._atm_expression_template.format(
-            **offset_default_global_parameter_names) # register params in place
+            **atm_global_param_names) # register params in place
 
         # valence forces
         valence_force_dict = self._make_valence_forces(**kwargs)
-        self._static_valence_force_terms = {} # for bookkeeping
+        self._artificial_valence_force_terms = {} # for bookkeeping
         for valence_force_name, valence_force_terms in valence_force_dict.items():
             # equip the static valence force terms for bookkeeping
-            self._static_valence_force_terms[valence_force_name] = \
-                valence_force_terms['static_term_dict']
+            self._artificial_valence_force_terms[valence_force_name] = \
+                valence_force_terms['artificial_term_dict']
 
             # then construct and equip CustomCVForce
             coll_vars = {_key: _val for _key, _val in valence_force_terms.items()
@@ -491,23 +649,26 @@ class BaseHybridSystemFactory(object):
                                **kwargs):
         """make `openmm.CustomCVForce` for nonbonded force and equip
         to `self._hybrid_system`"""
-        offset_default_global_parameter_names = {key : key[1:] for key in
-            self._atm_default_global_parameters.keys()} # remove `_` in param names
+        atm_global_param_names = {key: key for key in
+                          self._atm_default_global_parameters.keys()}
         energy_expr = self._atm_expression_template.format(
-            **offset_default_global_parameter_names) # register params in place
+            **atm_global_param_names) # register params in place
 
         # NonbondedForce
         old_nbf = self._old_forces[nonbonded_force_name]
         new_nbf = self._new_forces[nonbonded_force_name]
-        U0_nbf, U1_nbf, static_exception_indices = \
-            translate_standard_nonbonded_force(
+        U0_nbf, U1_nbf = translate_standard_nonbonded_force(
             old_nbf = old_nbf,
             new_nbf = new_nbf,
             num_hybrid_particles = self._hybrid_system.getNumParticles(),
             old_to_hybrid_map = self._old_to_hybrid_map,
             new_to_hybrid_map = self._new_to_hybrid_map,
-            unique_new_atoms = self._unique_new_atoms,
             unique_old_atoms = self._unique_old_atoms,
+            unique_new_atoms = self._unique_new_atoms,
+            unique_old_exc_offset_gp = self._nbf_unique_old_exc_offset_gp,
+            unique_new_exc_offset_gp = self._nbf_unique_new_exc_offset_gp,
+            exc_offset_gp = self._nbf_exc_offset_gp,
+            particle_offset_gp = self._nbf_particle_offset_gp,
             **kwargs)
         # then construct and equip CustomCVForce
         coll_vars = {'U0_static': U0_nbf, 'U1_static': U1_nbf}
@@ -516,9 +677,16 @@ class BaseHybridSystemFactory(object):
             energy_fn_expression = energy_expr,
             energy_fn_collective_vars = coll_vars,
             **kwargs)
-        self._static_nonbonded_exception_indices = static_exception_indices
         self._hybrid_system.addForce(nbf_cv)
 
     @property
     def hybrid_system(self):
         return copy.deepcopy(self._hybrid_system)
+
+    @property
+    def old_system(self):
+        return copy.deepcopy(self._old_system)
+
+    @property
+    def new_system(self):
+        return copy.deepcopy(self._new_system)
