@@ -534,34 +534,34 @@ class BaseSingleTopologyHybridSystemFactory(object):
 class V1SingleTopologyHybridSystemFactory(
     BaseSingleTopologyHybridSystemFactory):
     ATM_EXPR_TEMPLATE = [
-    'U0 + (({lambda2} - {lambda1})/{alpha}) * log_term + {lambda2}*u_sc + {w0};',
+    'U0 + (({atm_lambda2} - {atm_lambda1})/{atm_alpha}) * log_term + {atm_lambda2}*u_sc + {atm_w0};',
     'log_term = c + log(exp(-c) + exp(exponand-c));',
     'c = max(0, exponand);',
-    'exponand = -{alpha}*(u_sc - {u0});',
+    'exponand = -{atm_alpha}*(u_sc - {atm_u0});',
     'u_sc = select(soften_bool, u_soft, u);',
-    'soften_bool = step(u - {u_cut});',
-    'u_soft = ({u_max} - {u_cut}) * f_sc + {u_cut};',
-    'f_sc = (z_y^{a} - 1)/(z_y^{a} + 1);',
+    'soften_bool = step(u - {atm_u_cut});',
+    'u_soft = ({atm_u_max} - {atm_u_cut}) * f_sc + {atm_u_cut};',
+    'f_sc = (z_y^{atm_a} - 1)/(z_y^{atm_a} + 1);',
     'z_y = 1 + 2*y_by_a + 2*(y_by_a^2);',
-    'y_by_a = y / {a};',
-    'y = (u - {u_cut}) / ({u_max} - {u_cut});',
+    'y_by_a = y / {atm_a};',
+    'y = (u - {atm_u_cut}) / ({atm_u_max} - {atm_u_cut});',
     'u = U1 - U0;',
     'U1 = select(past_half, U0_static, U1_static);',
     'U0 = select(past_half, U1_static, U0_static);',
-    'past_half = step({time} - 0.5);']
+    'past_half = step({atm_time} - 0.5);']
 
     ATM_EXPR = ''.join(ATM_EXPR_TEMPLATE)
     ATM_COLLECTIVE_VARS = ['U0_static', 'U1_static']
     ATM_GLOBAL_PARAMS = {
-    'time': 0.,
-    'lambda1': 0.,
-    'lambda2': 0.,
-    'alpha': 0.1,
-    'u_cut': 200., # check this again in comparison to `_u0`
-    'u0': 100.,
-    'u_max': 400.,
-    'a': 0.0625,
-    'w0': 0.,}
+    'atm_time': 0.,
+    'atm_lambda1': 0.,
+    'atm_lambda2': 0.,
+    'atm_alpha': 0.1,
+    'atm_u_cut': 200., # check this again in comparison to `_u0`
+    'atm_u0': 100.,
+    'atm_u_max': 400.,
+    'atm_a': 0.0625,
+    'atm_w0': 0.,}
 
     VALENCE_EXPR_TEMPLATE = [
     "U0_static = old_term + static_term + unique_term;",
@@ -626,9 +626,9 @@ class V1SingleTopologyHybridSystemFactory(
         lambda1 = time if time < 0.5 else 1. - time
         lambda2 = lambda1
         updater = {
-            'time': time,
-            'lambda1': lambda1,
-            'lambda2': lambda2
+            'atm_time': time,
+            'atm_lambda1': lambda1,
+            'atm_lambda2': lambda2
             }
         parameters.update(updater)
         return parameters
@@ -720,7 +720,7 @@ class V1SingleTopologyHybridSystemFactory(
             reference_positions = new_positions, context_args = context_args)
 
         # now set the valence global parameters to match old
-        zero_atm_global_params = {'time': 0.,
+        zero_atm_global_params = {'atm_time': 0.,
             'unique_old_switch': 1.,
             'unique_new_switch': 0.,
             'U0_static_unique_old_exception_switch': 1.,
