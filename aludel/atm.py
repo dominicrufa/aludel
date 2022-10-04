@@ -539,7 +539,7 @@ class V1SingleTopologyHybridSystemFactory(
     'c = max(0, exponand);',
     'exponand = -{atm_alpha}*(u_sc - {atm_u0});',
     'u_sc = select(soften_bool, u_soft, u);',
-    'soften_bool = step(u - {atm_u_cut});',
+    'soften_bool = select(1-{atm_soften_switch}, u, step(u - {atm_u_cut}));',
     'u_soft = ({atm_u_max} - {atm_u_cut}) * f_sc + {atm_u_cut};',
     'f_sc = (z_y^{atm_a} - 1)/(z_y^{atm_a} + 1);',
     'z_y = 1 + 2*y_by_a + 2*(y_by_a^2);',
@@ -561,7 +561,9 @@ class V1SingleTopologyHybridSystemFactory(
     'atm_u0': 100.,
     'atm_u_max': 400.,
     'atm_a': 0.0625,
-    'atm_w0': 0.,}
+    'atm_w0': 0.,
+    'atm_soften_switch': 1. # bool to determine whether to allow for soft u_sc
+    }
 
     VALENCE_EXPR_TEMPLATE = [
     "U0_static = old_term + static_term + unique_term;",
