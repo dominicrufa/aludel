@@ -1,7 +1,24 @@
 """various utilities"""
 import os
+from openmm import unit
 from typing import Iterable, Any
 
+
+def maybe_params_as_unitless(parameters: Iterable) -> Iterable:
+  """translate an iterable of parameters (either unit.Quantity or not)
+  into ints/floats"""
+  dummy_unit = type(1.*unit.nanometers)
+  outs = []
+  for param in parameters:
+    if type(param) == dummy_unit:
+      outs.append(param.value_in_unit_system(unit.md_unit_system))
+    else:
+      outs.append(param)
+  return outs
+
+def sort_indices_to_str(indices: Iterable[int]) -> str:
+  sorted_indices = sorted(indices)
+  return '.'.join([str(_q) for _q in sorted_indices])
 
 def compressed_pickle(filename:str, data:Any):
   # pickle a file and compress

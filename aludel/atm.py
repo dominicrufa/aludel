@@ -3,24 +3,9 @@ from openmm import app, unit
 import numpy as np
 import copy
 from typing import Any, Tuple, Dict, Iterable, Callable
+from aludel.utils import maybe_params_as_unitless, sort_indices_to_str
 
 # utilities
-
-def maybe_params_as_unitless(parameters: Iterable) -> Iterable:
-    """translate an iterable of parameters (either unit.Quantity or not)
-    into ints/floats"""
-    dummy_unit = type(1.*unit.nanometers)
-    outs = []
-    for param in parameters:
-        if type(param) == dummy_unit:
-            outs.append(param.value_in_unit_system(unit.md_unit_system))
-        else:
-            outs.append(param)
-    return outs
-
-def sort_indices_to_str(indices: Iterable[int]) -> str:
-    sorted_indices = sorted(indices)
-    return '.'.join([str(_q) for _q in sorted_indices])
 
 def make_exception_param_from_particles(_force_to_query, particles):
     p1_particle_params = maybe_params_as_unitless(_force_to_query.getParticleParameters(particles[0]))
@@ -29,7 +14,6 @@ def make_exception_param_from_particles(_force_to_query, particles):
     s = (p1_particle_params[1] + p2_particle_params[1])/2.
     e = np.sqrt(p1_particle_params[2]*p2_particle_params[2])
     return cp, s, e
-
 
 def translate_standard_valence_force_to_custom(
     old_force: openmm.Force, # old valence force
@@ -330,16 +314,8 @@ def energy_by_force(system: openmm.System,
     iterate through each force object and return the potential energy per
     force object.
     """
-    forcename_to_index = {}
-    forcename_to_energy = {}
     for idx, force in enumerate(system.getForces()):
-        force_name = force.__class__.__name__
         force.setForceGroup(idx)
-        if force_name in forcename_to_index.keys():
-            raise Exception(f"""force name {force_name} already exists in
-            the system. This breaks the assumption on the construction of
-            the `openmm.Force` object""")
-        forcename_to_index[force_name] = idx
 
     context = openmm.Context(system, openmm.VerletIntegrator(1.), *context_args)
     if box_vectors is None:
@@ -349,12 +325,14 @@ def energy_by_force(system: openmm.System,
     if global_parameters is not None:
         for _name, _val in global_parameters.items():
             context.setParameter(_name, _val)
-    for force_name, idx in forcename_to_index.items():
+    out_energies = {}
+    for idx, force in enumerate(system.getForces()):
         state = context.getState(getEnergy=True, groups={idx})
         _e = state.getPotentialEnergy().value_in_unit_system(unit.md_unit_system)
-        forcename_to_energy[force_name] = _e
+        out_energies[force] = _e
     del context
-    return forcename_to_energy
+    return out_energies
+
 
 def getParameters_to_dict(mapstringdouble):
     out_dict = {}
@@ -539,16 +517,15 @@ class V1SingleTopologyHybridSystemFactory(
     'c = max(0, exponand);',
     'exponand = -{atm_alpha}*(u_sc - {atm_u0});',
     'u_sc = select(soften_bool, u_soft, u);',
-    'soften_bool = select(1-{atm_soften_switch}, u, step(u - {atm_u_cut}));',
+    'soften_bool = select(1-{atm_soften_switch}, 0, step(u - {atm_u_cut}));',
     'u_soft = ({atm_u_max} - {atm_u_cut}) * f_sc + {atm_u_cut};',
     'f_sc = (z_y^{atm_a} - 1)/(z_y^{atm_a} + 1);',
     'z_y = 1 + 2*y_by_a + 2*(y_by_a^2);',
     'y_by_a = y / {atm_a};',
     'y = (u - {atm_u_cut}) / ({atm_u_max} - {atm_u_cut});',
     'u = U1 - U0;',
-    'U1 = select(past_half, U0_static, U1_static);',
-    'U0 = select(past_half, U1_static, U0_static);',
-    'past_half = step({atm_time} - 0.5);']
+    'U1 = select({atm_leg}, U0_static, U1_static);',
+    'U0 = select({atm_leg}, U1_static, U0_static);']
 
     ATM_EXPR = ''.join(ATM_EXPR_TEMPLATE)
     ATM_COLLECTIVE_VARS = ['U0_static', 'U1_static']
@@ -562,7 +539,8 @@ class V1SingleTopologyHybridSystemFactory(
     'atm_u_max': 400.,
     'atm_a': 0.0625,
     'atm_w0': 0.,
-    'atm_soften_switch': 1. # bool to determine whether to allow for soft u_sc
+    'atm_soften_switch': 1., # bool to determine whether to allow for soft u_sc,
+    'atm_leg': 0.,
     }
 
     VALENCE_EXPR_TEMPLATE = [
@@ -627,10 +605,12 @@ class V1SingleTopologyHybridSystemFactory(
         `time` runs from 0 to 1"""
         lambda1 = time if time < 0.5 else 1. - time
         lambda2 = lambda1
+        leg = 0 if time < 0.5 else 1
         updater = {
             'atm_time': time,
             'atm_lambda1': lambda1,
-            'atm_lambda2': lambda2
+            'atm_lambda2': lambda2,
+            'atm_leg': leg,
             }
         parameters.update(updater)
         return parameters
@@ -723,6 +703,7 @@ class V1SingleTopologyHybridSystemFactory(
 
         # now set the valence global parameters to match old
         zero_atm_global_params = {'atm_time': 0.,
+            'atm_leg': 0.,
             'unique_old_switch': 1.,
             'unique_new_switch': 0.,
             'U0_static_unique_old_exception_switch': 1.,
@@ -764,3 +745,131 @@ class V1SingleTopologyHybridSystemFactory(
                             at state {endstate} match. ({orig_e} and {hybr_e}, respectively)""")
                     else:
                         pass
+
+class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactory):
+  """
+  SoftCore ReactionField Single Topology HybridSystemFactory;
+  WARNING: this operation can expect to take ~15s in complex phase.
+  """
+  def __init__(self, *args, **kwargs):
+    super().__init__(*args, **kwargs)
+
+  def _default_protocol(self, time, parameters, **unused_kwargs) -> Dict[str, float]:
+    updater = {'lambda_global': time}
+    parameters.update(updater)
+    return parameters
+
+  def _make_rf_systems(self, **kwargs):
+    """internal utility to make reaction-field systems
+    for energy matching comparisons and reference"""
+    from aludel.rf import ReactionFieldConverter
+    self._old_rf_system = ReactionFieldConverter(self._old_system, **kwargs).rf_system
+    self._new_rf_system = ReactionFieldConverter(self._new_system, **kwargs).rf_system
+
+
+  def _equip_hybrid_forces(self, **kwargs):
+    """
+    equip the valence and nonbonded forces
+    """
+    from aludel.valence import SingleTopologyHybridValenceConverter
+    from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter
+    # get the set of union forcenames
+    joint_forcenames = set(list(self._old_forces.keys()) + list(self._new_forces.keys()))
+    valence_forcenames = [i for i in self._allowed_force_names if i not in ['NonbondedForce',
+      'MonteCarloBarostat']]
+    for forcename in joint_forcenames:
+      if forcename in valence_forcenames: # if it is valence
+        # this will fail if the valence force is not in both systems
+        old_force = self._old_forces[forcename]
+        new_force = self._new_forces[forcename]
+        valence_hbf_factory = SingleTopologyHybridValenceConverter(
+          old_force = self._old_forces[forcename],
+          new_force = self._new_forces[forcename],
+          old_to_hybrid_map = self._old_to_hybrid_map,
+          new_to_hybrid_map = self._new_to_hybrid_map,
+          num_hybrid_particles = self._hybrid_system.getNumParticles(),
+          unique_old_atoms = self._unique_old_atoms,
+          unique_new_atoms = self._unique_new_atoms,
+          **kwargs)
+        out_force = valence_hbf_factory.hybrid_force
+        self._hybrid_system.addForce(out_force)
+
+    if 'NonbondedForce' in joint_forcenames:
+      nb_converter_factory = SingleTopologyHybridNBFReactionFieldConverter(
+        old_nbf=self._old_forces['NonbondedForce'],
+        new_nbf=self._new_forces['NonbondedForce'],
+        old_to_hybrid_map=self._old_to_hybrid_map,
+        new_to_hybrid_map=self._new_to_hybrid_map,
+        num_hybrid_particles=self._hybrid_system.getNumParticles(),
+        unique_old_atoms=self._unique_old_atoms,
+        unique_new_atoms=self._unique_new_atoms,
+        **kwargs)
+      hybrid_rf_nbfs = nb_converter_factory.rf_forces
+      _ = [self._hybrid_system.addForce(_q) for _q in hybrid_rf_nbfs]
+
+  def test_energy_endstates(self, old_positions, new_positions, atol=1e-2,
+    rtol=1e-6, verbose=False, context_args=(),
+    old_global_parameters = {'lambda_global': 0., 'retain_exception_switch': 0., 'retain_uniques': 0.},
+    new_global_parameters = {'lambda_global': 1., 'retain_exception_switch': 0., 'retain_uniques': 0.},
+    **kwargs):
+    """test the endstates energy bookkeeping here;
+    WARNING: for complex phase, this is an expensive operation (~30s on CPU).
+    """
+    from aludel.atm import (energy_by_force,
+      get_hybrid_positions, get_original_positions_from_hybrid)
+    from aludel.rf import ReactionFieldConverter
+
+    if verbose: print(f"generating old rf system...")
+    old_rf_system = ReactionFieldConverter(self._old_system, **kwargs).rf_system
+    if verbose: print(f"generating new rf system...")
+    new_rf_system = ReactionFieldConverter(self._new_system, **kwargs).rf_system
+
+    hybrid_system = self.hybrid_system
+    hybrid_positions = get_hybrid_positions(old_positions=old_positions,
+      new_positions=new_positions, num_hybrid_particles=self._hybrid_system.getNumParticles(),
+      old_to_hybrid_map = self._old_to_hybrid_map, new_to_hybrid_map = self._new_to_hybrid_map,
+      **kwargs)
+    old_positions = get_original_positions_from_hybrid(hybrid_positions=hybrid_positions,
+      hybrid_to_original_map=self._hybrid_to_old_map, **kwargs)
+    new_positions = get_original_positions_from_hybrid(hybrid_positions=hybrid_positions,
+      hybrid_to_original_map=self._hybrid_to_new_map, **kwargs)
+
+    # first, retrieve the old/new system forces by object
+    if verbose: print(f"computing old force energies.")
+    old_es = energy_by_force(system = copy.deepcopy(old_rf_system),
+      reference_positions = old_positions, context_args = context_args)
+    if verbose: print(f"computing new force energies")
+    new_es = energy_by_force(system = copy.deepcopy(new_rf_system),
+      reference_positions = new_positions, context_args = context_args)
+
+    if verbose: print(f"computing old hybrid force energies...")
+    hybr_old_es = energy_by_force(system = self.hybrid_system,
+      reference_positions = hybrid_positions, global_parameters=old_global_parameters,
+      context_args = context_args)
+    if verbose: print(f"computing new hybrid force energies...")
+    hybr_new_es = energy_by_force(system = copy.deepcopy(self.hybrid_system),
+      reference_positions = hybrid_positions, global_parameters=new_global_parameters,
+      context_args = context_args)
+
+    # old match
+    old_pass = np.isclose(np.sum(list(old_es.values())), np.sum(list(hybr_old_es.values())),
+      atol=atol, rtol=rtol)
+    if not old_pass:
+      raise Exception(f"""energy match of old/hybrid-old system failed; printing energy by forces...\n
+        \t{old_es}\n\t{hybr_old_es}""")
+
+    # new match
+    new_pass = np.isclose(np.sum(list(new_es.values())), np.sum(list(hybr_new_es.values())))
+    if not new_pass:
+      raise Exception(f"""energy match of new/hybrid-new system failed; printing energy by forces...\n
+        \t{new_es}\n\t{hybr_new_es}""")
+
+    if verbose:
+      for nonalch_state, alch_state, state_name in zip(
+        [old_es, new_es], [hybr_old_es, hybr_new_es], ['old', 'new']):
+        print(f"""passed; printing {state_name} nonalch and alch energies by force:""")
+        for _force, _energy in nonalch_state.items():
+          print(f"\t", _force.__class__.__name__, _energy)
+        print("\n")
+        for _force, _energy in alch_state.items():
+          print(f"\t", _force.__class__.__name__, _energy)
