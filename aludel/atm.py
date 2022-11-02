@@ -308,7 +308,8 @@ def energy_by_force(system: openmm.System,
                     reference_positions: unit.Quantity,
                     context_args: Tuple[Any],
                     box_vectors: Tuple[unit.Quantity]=None,
-                    global_parameters: Dict[str, int]=None) -> Dict[str, unit.Quantity]:
+                    global_parameters: Dict[str, int]=None,
+                    forces_too: bool=False) -> Dict[str, unit.Quantity]:
     """
     from a unique-force-style system with reference positions/box_vectors,
     iterate through each force object and return the potential energy per
@@ -326,12 +327,18 @@ def energy_by_force(system: openmm.System,
         for _name, _val in global_parameters.items():
             context.setParameter(_name, _val)
     out_energies = {}
+    out_forces = {}
     for idx, force in enumerate(system.getForces()):
-        state = context.getState(getEnergy=True, groups={idx})
+        state = context.getState(getEnergy=True, getForces=True, groups={idx})
         _e = state.getPotentialEnergy().value_in_unit_system(unit.md_unit_system)
+        _f = state.getForces(asNumpy=True).value_in_unit_system(unit.md_unit_system)
         out_energies[force] = _e
+        out_forces[force] = _f
     del context
-    return out_energies
+    if forces_too:
+        return out_energies, out_forces
+    else:
+        return out_energies
 
 
 def getParameters_to_dict(mapstringdouble):

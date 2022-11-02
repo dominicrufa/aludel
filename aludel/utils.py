@@ -42,6 +42,35 @@ def read_pickle(filename:str) -> Any:
     f.close()
     return data
 
+def deserialize_xml(xml_filename):
+    """
+    load and deserialize an xml
+    arguments
+        xml_filename : str
+            full path of the xml filename
+    returns
+        xml_deserialized : deserialized xml object
+    """
+    from openmm.openmm import XmlSerializer
+    with open(xml_filename, 'r') as infile:
+        xml_readable = infile.read()
+    xml_deserialized = XmlSerializer.deserialize(xml_readable)
+    return xml_deserialized
+
+def serialize_xml(object, xml_filename):
+    """
+    load and deserialize an xml
+    arguments
+        object : object
+            serializable
+        xml_filename : str
+            full path of the xml filename
+    """
+    from openmm.openmm import XmlSerializer
+    with open(xml_filename, 'w') as outfile:
+        serial = XmlSerializer.serialize(object)
+        outfile.write(serial)
+
 def query_outdirs_from_perses(
     perses_base_dir: str,
     write_to_dir: str,
