@@ -674,7 +674,7 @@ class V1SingleTopologyHybridSystemFactory(
             _ = self._hybrid_system.addForce(cv)
 
     def test_energy_endstates(self, old_positions, new_positions,
-        atol=1e-2, rtol=1e-6, verbose=False,
+        atol=1e-1, rtol=1e-6, verbose=False,
         context_args = (), **unused_kwargs):
         hybrid_system = self.hybrid_system # get the hybrid system
 
@@ -852,24 +852,38 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
       context_args = context_args)
 
     # old match
-    old_pass = np.isclose(np.sum(list(old_es.values())), np.sum(list(hybr_old_es.values())),
+    old_es_sum = np.sum(list(old_es.values()))
+    hybr_old_es_sum = np.sum(list(hybr_old_es.values()))
+    old_pass = np.isclose(old_es_sum, hybr_old_es_sum,
       atol=atol, rtol=rtol)
     if not old_pass:
-      raise Exception(f"""energy match of old/hybrid-old system failed; printing energy by forces...\n
-        \t{old_es}\n\t{hybr_old_es}""")
+      print(f"""energy match of old/hybrid-old system failed; printing energy by forces...\n
+        \t{old_es_sum}\n\t{hybr_old_es_sum}""")
+    else:
+      print(f"passed with energy match: {old_es_sum, hybr_old_es_sum}")
 
     # new match
-    new_pass = np.isclose(np.sum(list(new_es.values())), np.sum(list(hybr_new_es.values())))
+    new_es_sum = np.sum(list(new_es.values()))
+    hybr_new_es_sum = np.sum(list(hybr_new_es.values()))
+    new_pass = np.isclose(new_es_sum, hybr_new_es_sum,
+      atol=atol, rtol=rtol)
     if not new_pass:
-      raise Exception(f"""energy match of new/hybrid-new system failed; printing energy by forces...\n
-        \t{new_es}\n\t{hybr_new_es}""")
+      print(f"""energy match of new/hybrid-new system failed; printing energy by forces...\n
+        \t{new_es_sum}\n\t{hybr_new_es_sum}""")
+    else:
+      print(f"passed with energy match: {new_es_sum, hybr_new_es_sum}")
 
     if verbose:
       for nonalch_state, alch_state, state_name in zip(
         [old_es, new_es], [hybr_old_es, hybr_new_es], ['old', 'new']):
-        print(f"""passed; printing {state_name} nonalch and alch energies by force:""")
+        print(f"""printing {state_name} nonalch and alch energies by force:""")
         for _force, _energy in nonalch_state.items():
           print(f"\t", _force.__class__.__name__, _energy)
         print("\n")
         for _force, _energy in alch_state.items():
           print(f"\t", _force.__class__.__name__, _energy)
+
+    if not old_pass:
+      raise Exception(f"old failed")
+    if not new_pass:
+      raise Exception(f"new failed")
