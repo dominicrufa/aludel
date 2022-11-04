@@ -818,7 +818,7 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
     rtol=1e-6, verbose=False, context_args=(),
     old_global_parameters = {'lambda_global': 0., 'retain_exception_switch': 0., 'retain_uniques': 0.},
     new_global_parameters = {'lambda_global': 1., 'retain_exception_switch': 0., 'retain_uniques': 0.},
-    **kwargs):
+    return_energy_differences=False, **kwargs):
     """test the endstates energy bookkeeping here;
     WARNING: for complex phase, this is an expensive operation (~30s on CPU).
     """
@@ -890,7 +890,8 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
         for _force, _energy in alch_state.items():
           print(f"\t", _force.__class__.__name__, _energy)
 
-    if not old_pass:
-      raise Exception(f"old failed")
-    if not new_pass:
-      raise Exception(f"new failed")
+    if return_energy_differences:
+      return [[old_es_sum, hybr_old_es_sum], [new_es_sum, hybr_new_es_sum]]
+    else:
+      if not old_pass: raise Exception(f"old failed")
+      if not new_pass: raise Exception(f"new failed")
