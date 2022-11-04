@@ -236,14 +236,16 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     'reff_q_ = sigma*((softcore_beta*(1-lam_sub_)^softcore_e + (r/sigma)^softcore_f))^(1/softcore_f);']
   NB_SELF_TEMPLATE = "0.5*{ONE_4PI_EPS0} * chargeprod_ * (-{crf});"
   NB_GLOBAL_PARAMETERS = {
+  # turn values of 1. into 1+1e-3 because of omm bug:
+  # https://github.com/openmm/openmm/issues/3833
     'lambda_global': 0.,
     'softcore_alpha': 0.5,
     'softcore_beta': 0.5,
-    'softcore_b': 1,
-    'softcore_c': 6,
-    'softcore_d': 1,
-    'softcore_e': 1,
-    'softcore_f': 2,
+    'softcore_b': 1.001,
+    'softcore_c': 6.,
+    'softcore_d': 1.001,
+    'softcore_e': 1.001,
+    'softcore_f': 2.,
     }
   def __init__(self: Any,
     old_nbf: openmm.NonbondedForce,
