@@ -4,7 +4,7 @@ import sys
 data_path = '/data/chodera/rufad/aludel/tyk2'
 nc_prefix = 'tyk2'
 run_template = "python rxn_field_repex.py --data_path {data_path} --nc_prefix {nc_prefix} --phase {phase}"
-all_files = os.listdir()
+all_files = os.listdir(data_path)
 all_pbz2s = [i for i in all_files if i[-4:] == 'pbz2']
 all_pbz2_paths = [os.path.join(data_path, i) for i in all_pbz2s]
 print(f"all files: {all_pbz2_paths}")
