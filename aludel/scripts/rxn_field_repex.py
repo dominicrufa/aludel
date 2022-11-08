@@ -62,9 +62,9 @@ if __name__ == "__main__":
     minimization_tolerance=10, lambda_schedule=np.linspace(0, 1., 11))
 
   # set the context cache platforms appropriately
-  hss.energy_context_cache = cache.ContextCache(capacity=None, time_to_live=None,
+  sampler.energy_context_cache = cache.ContextCache(capacity=None, time_to_live=None,
     platform=platform)
-  hss.sampler_context_cache = cache.ContextCache(capacity=None, time_to_live=None,
+  sampler.sampler_context_cache = cache.ContextCache(capacity=None, time_to_live=None,
     platform=platform)
 
   sampler.equilibrate(10) # this is a bit arbitrary
