@@ -39,6 +39,7 @@ def get_openmm_platform(platform_name=None):
     platform.setPropertyDefaultValue('Precision', 'mixed')
   if name in ['CUDA']:
     platform.setPropertyDefaultValue('DeterministicForces', 'true')
+    platform.setPropertyDefaultValue('CudaPrecision', 'mixed') # this just CUDA?
   return platform
 
 # specific to `SCRFSingleTopologyHybridSystemFactory`
