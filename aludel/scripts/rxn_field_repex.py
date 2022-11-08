@@ -10,7 +10,7 @@ import argparse
 
 # aludel imports
 from aludel.repex import HybridRepexSampler
-from aludel.utils import decompress_pickle
+from aludel.utils import decompress_pickle, get_openmm_platform
 from aludel.atm import SCRFSingleTopologyHybridSystemFactory
 from aludel.atm import (get_hybrid_positions,
   get_original_positions_from_hybrid)
