@@ -26,9 +26,10 @@ args = parser.parse_args()
 
 if __name__ == "__main__":
   data = decompress_pickle(args.data_path)
-  pbz2_filename = '/'.split(args.data_path)[-1]
-  pbz2_filename_prefix = '.'.split(pbz2_filename)[0]
-  out_ncfile_base = args.nc_prefix + '.' + pbz2_filename_prefix + '.nc'
+  pbz2_filename = args.data_path.split('/')[-1]
+  pbz2_filename_prefix = pbz2_filename.split('.')[0]
+  out_ncfile_base = ".".join([args.nc_prefix,
+    pbz2_filename_prefix, args.phase, 'nc'])
 
   stfactory = SCRFSingleTopologyHybridSystemFactory(
   old_system=data[args.phase]['old_system'],
