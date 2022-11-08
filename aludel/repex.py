@@ -43,14 +43,12 @@ def get_openmm_platform(platform_name=None):
   return platform
 
 # specific to `SCRFSingleTopologyHybridSystemFactory`
-  class SCRFSingleTopologyHybridLambdaProtocol(object):
+class SCRFSingleTopologyHybridLambdaProtocol(object):
   # lambda_protocol
   default_functions = {'lambda_global': lambda x: x}
 
   def __init__(self, *args, **kwargs):
     self.functions = copy.deepcopy(self.default_functions)
-
-###
 
 class RelativeAlchemicalState(AlchemicalState):
   class _LambdaParameter(AlchemicalState._LambdaParameter):
