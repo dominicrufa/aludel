@@ -12,7 +12,6 @@ from openmmtools import states
 from openmmtools.states import CompoundThermodynamicState, SamplerState, ThermodynamicState
 from openmmtools import cache
 from openmmtools.multistate import replicaexchange
-from openmmtools.multistate import MultiStateReporter
 
 # specific to RF
 from aludel.atm import SCRFSingleTopologyHybridSystemFactory

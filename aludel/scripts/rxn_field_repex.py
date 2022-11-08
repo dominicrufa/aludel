@@ -14,6 +14,7 @@ from aludel.utils import decompress_pickle
 from aludel.atm import SCRFSingleTopologyHybridSystemFactory
 from aludel.atm import (get_hybrid_positions,
   get_original_positions_from_hybrid)
+from openmmtools.multistate import MultiStateReporter
 from openmmtools import cache, utils, mcmc
 
 parser = argparse.ArgumentParser(description = f"run rf repex...")
