@@ -2,7 +2,7 @@
 import os
 import openmm
 from openmm import unit
-from typing import Any, Tuple, Dict, Iterable, Callable
+from typing import Any, Tuple, Dict, Iterable, Callable, Tuple
 import numpy as np
 import copy
 
@@ -15,6 +15,8 @@ from openmmtools.multistate import replicaexchange
 
 # specific to RF
 from aludel.atm import SCRFSingleTopologyHybridSystemFactory
+
+unit_type = type(unit)
 
 # simulation-specific utilities
 def minimize(thermodynamic_state : ThermodynamicState, sampler_state: SamplerState,
@@ -104,3 +106,34 @@ class HybridCompatibilityMixin(object):
 class HybridRepexSampler(HybridCompatibilityMixin, replicaexchange.ReplicaExchangeSampler):
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
+
+def get_f_from_nc(nc_path: str,
+  **unused_kwargs) -> Tuple[unit_type, unit_type, np.array, np.array]:
+  """compute the df and ddf matrices (in kT);
+  returns (f, df, f_ij, df_ij) """
+  from openmmtools.multistate import (MultiStateReporter,
+    MultiStateSamplerAnalyzer)
+  reporter = MultiStateReporter(nc_path)
+  analyzer = MultiStateSamplerAnalyzer(reporter)
+  f_ij, df_ij = analyzer.get_free_energy()
+  f = f_ij[0,-1]*analyzer.kT
+  df = df_ij[0,-1]*analyzer.kT
+  out_f, out_df = (f.in_units_of(unit.kilocalorie_per_mole),
+    df.in_units_of(unit.kilocalorie_per_mole))
+  return out_f, out_df, f_ij, df_ij
+
+def get_bindingdf_from_ncs(solvent_nc_path: str, complex_nc_path: str,
+  **unused_kwargs) -> Tuple[unit_type, unit_type, Dict[str, Tuple[np.array, np.array]]]:
+  """compute the binding df from solvent/complex legs;
+  returns (binding_df, binding_ddf, {<phase>: f_ij, df_ij})"""
+  metadata = {}
+  data = []
+  for _path, _phase in zip([solvent_nc_path, complex_nc_path],
+    ['solvent', 'complex']):
+    f, df, f_ij, df_ij = get_f_from_nc(_path)
+    data.append([f, df])
+    metadata[_phase] = (f_ij, df_ij)
+  # solvent, then complex
+  binding_df = data[0][0] - data[1][0]
+  binding_ddf = np.sqrt(data[0][1]**2 + data[1][1]**2)
+  return binding_df, binding_ddf, metadata
