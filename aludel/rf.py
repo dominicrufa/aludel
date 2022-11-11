@@ -225,15 +225,14 @@ def make_constraint_dict(old_system: openmm.System,
   return constraint_data
 
 class SingleTopologyHybridNBFReactionFieldConverter():
-  NB_PAIR_TEMPLATE = ['lj_e + elec_e;',
+  NB_PAIR_TEMPLATE = ['lj_e + elec_e;', # elec_e = step(r_cutoff - reff_q, elec_e, )
     "elec_e = elec_term1 + elec_term2;",
     "elec_term1 = {ONE_4PI_EPS0}*chargeprod*(1/reff_q);",
-    "elec_term2 = {ONE_4PI_EPS0}*chargeprod_*({krf}*reff_q_^2 + {arfm}*reff_q_^4 + {arfn}*reff_q_^6 - {crf});",
+    "elec_term2 = {ONE_4PI_EPS0}*chargeprod_*({krf}*r^2 + {arfm}*r^4 + {arfn}*r^6 - {crf});",
     "lj_e = 4*epsilon*lj_x*(lj_x-1);",
     'lj_x = (sigma/reff_lj)^6;',
     'reff_lj = sigma*((softcore_alpha*(1-lam_sub)^softcore_b + (r/sigma)^softcore_c))^(1/softcore_c);',
-    'reff_q = sigma*((softcore_beta*(1-lam_sub)^softcore_e + (r/sigma)^softcore_f))^(1/softcore_f);',
-    'reff_q_ = sigma*((softcore_beta*(1-lam_sub_)^softcore_e + (r/sigma)^softcore_f))^(1/softcore_f);']
+    'reff_q = sigma*((softcore_beta*(1-lam_sub)^softcore_e + (r/sigma)^softcore_f))^(1/softcore_f);']
   NB_SELF_TEMPLATE = "0.5*{ONE_4PI_EPS0} * chargeprod_ * (-{crf});"
   NB_GLOBAL_PARAMETERS = {
   # turn values of 1. into 1+1e-3 because of omm bug:
@@ -294,7 +293,6 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     # this is starting to look at lot like `_get_aux_mapped_exception_terms`;
     # maybe we can solve this?
     aux_template = [
-      'lam_sub_ = 1.;' # never lift the singularity-less elec term
       'lam_sub = select(1-lift_somewhere, 1., lifting_selector);', # dont lift at both
       'lift_somewhere = step(lift_at_zero + lift_at_one - 0.1);'
       'lifting_selector = select(1-lift_at_zero, 1-lambda_global, lambda_global);'] # this is right!
@@ -321,7 +319,6 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     """exception template for unique pairs"""
     aux_template = [
       'lam_sub = 1;', # never softcore the chargeprod interaction
-      'lam_sub_ = 1;', # never softcore the chargeprod_ interaction
       # (exc) chargeprod is retained if `retain_exception_switch`, else scaled.
       'chargeprod = select(1 - retain_exception_switch, lam_scale*in_chargeprod, in_chargeprod);',
       # (nonexc) chargeprod is always linearly interp from old to new
@@ -347,7 +344,6 @@ class SingleTopologyHybridNBFReactionFieldConverter():
       # if term disappears, lift at 1; if term appears, lift at zero.
       'lam_sub = select(1-lift_somewhere, 1., lifting_selector);',
       'lift_somewhere = step(lift_at_zero + lift_at_one - 0.1);',
-      'lam_sub_ = 1;', # never lift this term.
       'lifting_selector = select(1-lift_at_zero, 1-lambda_global, lambda_global);'
     ]
     perBondParameters = ['old_chargeprod', 'new_chargeprod', 'old_chargeprod_', 'new_chargeprod_',
