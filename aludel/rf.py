@@ -602,29 +602,3 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         new_c1 = 0.
       _ = bf.addBond(i, i, [old_c1*old_c1, new_c1*new_c1])
     return bf
-
-
-class LDSingleTopologyHybridNBFReactionFieldConverter(
-  SingleTopologyHybridNBFReactionFieldConverter):
-  """reaction field converter for lambda dynamics"""
-  NB_PAIR_TEMPLATE = ['lj_e + elec_e;', # elec_e = step(r_cutoff - reff_q, elec_e, )
-    "elec_e = elec_term1 + elec_term2;",
-    "elec_term1 = {ONE_4PI_EPS0}*chargeprod*(1/reff_q);",
-    "elec_term2 = {ONE_4PI_EPS0}*chargeprod_*({krf}*r^2 + {arfm}*r^4 + {arfn}*r^6 - {crf});",
-    "lj_e = 4*epsilon*lj_x*(lj_x-1);",
-    'lj_x = (sigma/reff_lj)^6;',
-    'reff_lj = sigma*((softcore_alpha*(1-lam_sub)^softcore_b + (r/sigma)^softcore_c))^(1/softcore_c);',
-    'reff_q = sigma*((softcore_beta*(1-lam_sub)^softcore_e + (r/sigma)^softcore_f))^(1/softcore_f);']
-  NB_SELF_TEMPLATE = "0.5*{ONE_4PI_EPS0} * chargeprod_ * (-{crf});"
-  NB_GLOBAL_PARAMETERS = {
-  # turn values of 1. into 1+1e-3 because of omm bug:
-  # https://github.com/openmm/openmm/issues/3833
-    'lambda_global': 0.,
-    'softcore_alpha': 0.5,
-    'softcore_beta': 0.5,
-    'softcore_b': 1.001,
-    'softcore_c': 6.,
-    'softcore_d': 1.001,
-    'softcore_e': 1.001,
-    'softcore_f': 2.,
-    }
