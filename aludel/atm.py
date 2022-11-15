@@ -773,13 +773,21 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
     self._old_rf_system = ReactionFieldConverter(self._old_system, **kwargs).rf_system
     self._new_rf_system = ReactionFieldConverter(self._new_system, **kwargs).rf_system
 
+  def _get_valence_converter(self, **unused_kwargs):
+    """get the valence converter factory"""
+    from aludel.valence import SingleTopologyHybridValenceConverter
+    return SingleTopologyHybridValenceConverter
+
+  def _get_nonbonded_converter(self, **unused_kwargs):
+    from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter
+    return SingleTopologyHybridNBFReactionFieldConverter
 
   def _equip_hybrid_forces(self, **kwargs):
     """
     equip the valence and nonbonded forces
     """
-    from aludel.valence import SingleTopologyHybridValenceConverter
-    from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter
+    valence_converter = self._get_valence_converter(**kwargs)
+    nonbonded_converter = self._get_nonbonded_converter(**kwargs)
     # get the set of union forcenames
     joint_forcenames = set(list(self._old_forces.keys()) + list(self._new_forces.keys()))
     valence_forcenames = [i for i in self._allowed_force_names if i not in ['NonbondedForce',
@@ -789,7 +797,7 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
         # this will fail if the valence force is not in both systems
         old_force = self._old_forces[forcename]
         new_force = self._new_forces[forcename]
-        valence_hbf_factory = SingleTopologyHybridValenceConverter(
+        valence_hbf_factory = valence_converter(
           old_force = self._old_forces[forcename],
           new_force = self._new_forces[forcename],
           old_to_hybrid_map = self._old_to_hybrid_map,
@@ -802,7 +810,7 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
         self._hybrid_system.addForce(out_force)
 
     if 'NonbondedForce' in joint_forcenames:
-      nb_converter_factory = SingleTopologyHybridNBFReactionFieldConverter(
+      nb_converter_factory = nonbonded_converter(
         old_nbf=self._old_forces['NonbondedForce'],
         new_nbf=self._new_forces['NonbondedForce'],
         old_to_hybrid_map=self._old_to_hybrid_map,
