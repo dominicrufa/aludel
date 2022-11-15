@@ -571,7 +571,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
               this bit of code is bleeding edge and not well-tested.
               revisit your mapping strategy, please.""")
         # and that's all the exceptions.
-    return unique_bf, custom_bf
+    return [unique_bf, custom_bf]
 
   def make_self_force(self, **unused_kwargs):
     bf = openmm.CustomBondForce('') # space filler for expression
