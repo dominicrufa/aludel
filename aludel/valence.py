@@ -180,3 +180,24 @@ class SingleTopologyHybridValenceConverter(object):
                 _ = term_adder_fn(*hybr_indices,
                   [_q*0. for _q in unitless_term_params] + unitless_term_params + [0,0,1])
     return U_out
+
+class ThetaIntegratorsSingleTopologyHybridValenceConverter(SingleTopologyHybridValenceConverter):
+  """convert a valence force to a Lambda Dynamics-amenable valence force
+  Specifically, we want this force to be able to integrate into `aludel.ThetaIntegratorV1`.
+      1. remove `lambda_global` as the GlobalParameter and replace it with `theta_global`,
+      2. addEnergyParameterDerivative('theta_global')
+      3. add the definition of `lambda_global` from `theta_global`
+  """
+  GLOBAL_PARAMETERS = {'theta_global': 0, 'retain_uniques': 1.} # replace `lambda_global` with `theta_global`
+  def __init__(self, *args, **kwargs):
+    self._init_lambda_f_str = "lambda_global = sin(theta_global)^2;"
+    super().__init__(*args, **kwargs)
+    self._translate_valence_energy_fn(**kwargs)
+
+  def _translate_valence_energy_fn(self, **unused_kwargs):
+    """modify the `self._hybrid_force.getEnergyFunction()`
+      in place and add energy parameter derivative"""
+    force_expr = self._hybrid_force.getEnergyFunction()
+    new_force_expr = force_expr + self._init_lambda_f_str
+    self._hybrid_force.setEnergyFunction(new_force_expr)
+    self._hybrid_force.addEnergyParameterDerivative('theta_global')

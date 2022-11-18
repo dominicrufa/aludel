@@ -903,3 +903,14 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
     else:
       if not old_pass: raise Exception(f"old failed")
       if not new_pass: raise Exception(f"new failed")
+
+class ThetaIntegratorSCRFSingleTopologyHybridSystemFactory(
+  SCRFSingleTopologyHybridSystemFactory):
+  """convert a hybrid system controlled by `softcore_alpha` to a hybrid system controlled by `theta_global`"""
+  def __init__(self, *args, **kwargs):
+    # define `softcore_alpha_str`, `default_theta_global`
+    super().__init__(*args, **kwargs)
+
+  def _get_nonbonded_converter(self, **unused_kwargs):
+    from aludel.rf import ThetaIntegratorSingleTopologyHybridNBFReactionFieldConverter
+    return ThetaIntegratorSingleTopologyHybridNBFReactionFieldConverter

@@ -602,3 +602,50 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         new_c1 = 0.
       _ = bf.addBond(i, i, [old_c1*old_c1, new_c1*new_c1])
     return bf
+
+class ThetaIntegratorSingleTopologyHybridNBFReactionFieldConverter(
+  SingleTopologyHybridNBFReactionFieldConverter):
+  """convert a nonbonded set of forces to a Lambda-Dynamics-amenable valence force"""
+  def __init__(self,
+    default_theta_global: float,
+    softcore_alpha_str: str,
+    theta_global_energy_str: str,
+    *args, **kwargs):
+    # replace the existing global parameter
+    self._default_theta_global = default_theta_global
+    self.NB_GLOBAL_PARAMETERS['theta_global'] = self.NB_GLOBAL_PARAMETERS.pop('softcore_alpha') # pop softcore alpha
+    self.NB_GLOBAL_PARAMETERS['theta_global'] = self._default_theta_global
+    self._softcore_alpha_str = softcore_alpha_str
+    self._theta_global_energy_str = theta_global_energy_str
+    super().__init__(*args, **kwargs)
+    self._translate_energy_fn(**kwargs) # modify the functions in place
+    self._add_softcore_alpha_bias_potential(**kwargs)
+
+  def _translate_energy_fn(self, **unused_kwargs):
+    """do an in-place update of custom forces for `theta_global`
+    and add energy parameter derivative """
+    force_collection = [self._custom_nbf] + self._custom_bfs + [self._self_bf]
+    for _force in force_collection:
+      energy_str = _force.getEnergyFunction()
+      _force.setEnergyFunction(energy_str + self._softcore_alpha_str)
+      _force.addEnergyParameterDerivative('theta_global')
+
+  def _add_softcore_alpha_bias_potential(self, **kwargs):
+    """
+    add a biasing potential to the softcore alpha parameter
+    """
+    bf = openmm.CustomBondForce(self._theta_global_energy_str)
+    bf.addBond(0,0,[]) # add dummy bond to initialize
+    bf.addGlobalParameter('theta_global', self._default_theta_global)
+    bf.addEnergyParameterDerivative('theta_global')
+    self._theta_bf = bf
+
+  @property
+  def rf_forces(self):
+    outs = []
+    outs.append(copy.deepcopy(self._custom_nbf))
+    outs.append(copy.deepcopy(self._custom_bfs[0]))
+    outs.append(copy.deepcopy(self._custom_bfs[1]))
+    outs.append(copy.deepcopy(self._self_bf))
+    outs.append(copy.deepcopy(self._theta_bf))
+    return outs
