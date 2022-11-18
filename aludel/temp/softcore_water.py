@@ -67,5 +67,5 @@ def translate_WaterBox_to_factory(direction:str = 'symmetric', **unused_kwargs):
   new_to_hybrid_map = stfactory._new_to_hybrid_map)
   old_pos = get_original_positions_from_hybrid(hybrid_positions, stfactory._hybrid_to_old_map)
   new_pos = get_original_positions_from_hybrid(hybrid_positions, stfactory._hybrid_to_new_map)
-  stfactory.test_energy_endstates(old_pos, new_pos, atol=1e-1, verbose=False)
+  stfactory.test_energy_endstates(old_pos, new_pos, atol=1e-1, verbose=True)
   return stfactory, positions
