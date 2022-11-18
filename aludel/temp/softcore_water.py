@@ -69,6 +69,6 @@ def translate_WaterBox_to_factory(direction:str = 'symmetric', **unused_kwargs):
   new_pos = get_original_positions_from_hybrid(hybrid_positions, stfactory._hybrid_to_new_map)
   try:
     stfactory.test_energy_endstates(old_pos, new_pos, atol=1e-1, verbose=True)
-  exception Exception as e:
+  except Exception as e:
     print(f"water box endstate validation failed with exception {e}")
   return stfactory, positions
