@@ -908,7 +908,7 @@ class ThetaIntegratorSCRFSingleTopologyHybridSystemFactory(
   SCRFSingleTopologyHybridSystemFactory):
   """convert a hybrid system controlled by `softcore_alpha` to a hybrid system controlled by `theta_global`"""
   def __init__(self, *args, **kwargs):
-    # define `softcore_alpha_str`, `default_theta_global`
+    # define `softcore_alpha_str`, `default_theta_global`, `theta_global_energy_str`
     super().__init__(*args, **kwargs)
 
   def _get_nonbonded_converter(self, **unused_kwargs):

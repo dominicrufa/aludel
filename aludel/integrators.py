@@ -5,7 +5,7 @@ import openmm
 from openmm import unit
 import numpy as np
 import copy
-from typing import from typing import Any, Tuple, Dict, Iterable, Callable
+from typing import Any, Tuple, Dict, Iterable, Callable
 
 class ThetaIntegratorV1(openmm.CustomIntegrator):
   """version 1 of a lambda dynamics integrator that performs lambda dynamics on `softcore_alpha`"""
@@ -76,7 +76,7 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     (akin to `setVelocitiesToTemperature`)"""
     self.setGlobalVariableByName("omega", "sqrt(kT/I)*gaussian") # randomize velocity
 
-class ThetaNonequilibriumIntegrator(openmm.ThetaIntegratorV1):
+class ThetaNonequilibriumIntegrator(ThetaIntegratorV1):
   """make a `ThetaIntegratorV1` with a Hamiltonian perturbation step on `lambda_global`"""
   def __init__(self, num_steps, lambda_global_name: str='lambda_global',
     *args, **kwargs):
