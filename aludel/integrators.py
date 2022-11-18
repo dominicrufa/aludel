@@ -38,7 +38,8 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     self.addGlobalVariable('x1', 0)
     self.addGlobalVariable("I",
       self._I.value_in_unit_system(unit.md_unit_system)) # moment of inertia of theta
-    self.addGlobalVariable("omega", "sqrt(kT/I)*gaussian") # randomize velocity
+    self.addGlobalVariable("omega", 0.) # randomize velocity
+    self.randomize_omega(**unused_kwargs)
     self.addGlobalVariable(self._theta_name, self._init_theta) # initialize the value of theta
 
   def _add_full_V_step(self, **kwargs):
@@ -62,7 +63,6 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     self.addComputePerDof("x1", "x")
     self.addConstrainPositions("v", "v + (x - x1)/dt")
 
-
   def _add_body(self, **kwargs):
     self.addUpdateContextState() # need to do this
     self._add_full_V_step(**kwargs)
@@ -72,9 +72,10 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     self._add_constrain_R_fix_V(**kwargs)
 
   def randomize_omega(self, **unused_kwargs):
-    """randomize the angular velocity of lambda_global
-    (akin to `setVelocitiesToTemperature`)"""
-    self.setGlobalVariableByName("omega", "sqrt(kT/I)*gaussian") # randomize velocity
+    _val = np.sqrt(
+      (self._kB*self._temperature/self._I).value_in_unit_system(unit.md_unit_system)
+      )*np.random.normal()
+    self.setGlobalParameterName('omega', _val)
 
 class ThetaNonequilibriumIntegrator(ThetaIntegratorV1):
   """make a `ThetaIntegratorV1` with a Hamiltonian perturbation step on `lambda_global`"""
