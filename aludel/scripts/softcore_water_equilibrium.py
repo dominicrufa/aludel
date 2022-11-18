@@ -27,9 +27,10 @@ if __name__ == "__main__":
   integrator = openmm.LangevinMiddleIntegrator(softcore_water.temperature,
     1./unit.picoseconds, 4.*unit.femtoseconds)
   context = openmm.Context(factory.hybrid_system, integrator, platform)
+  context.setPositions(positions)
   out_cache = {0.: {'box_vectors': [], 'positions': [], 'pe': []},
                1.: {'box_vectors': [], 'positions': [], 'pe': []}}
-  for key, in out_cache.keys():
+  for key in out_cache.keys():
     context.setParameter('lambda_global', key)
     openmm.LocalEnergyMinimizer.minimize(context, tolerance=10.)
     context.setVelocitiesToTemperature(softcore_water.temperature)
