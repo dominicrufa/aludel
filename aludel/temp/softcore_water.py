@@ -42,7 +42,7 @@ def translate_WaterBox_to_factory(direction:str = 'symmetric', **unused_kwargs):
   elif direction == 'off':
     _ = [new_nbf.setParticleParameters(i, 0., 1., 0.) for i in [0,1,2]] # turn water 0 off
   elif direction == 'on':
-    _ = [old_nbf.setParticleParameters(i, 0., 1., 0.) for i in [3,4,5]] # turn water 1 off
+    _ = [old_nbf.setParticleParameters(i, 0., 1., 0.) for i in [3,4,5]] # turn water 1 on
   else:
     raise Exception()
 
