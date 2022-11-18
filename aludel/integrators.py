@@ -75,7 +75,7 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     _val = np.sqrt(
       (self._kB*self._temperature/self._I).value_in_unit_system(unit.md_unit_system)
       )*np.random.normal()
-    self.setGlobalParameterName('omega', _val)
+    self.setGlobalVariableByName('omega', _val)
 
 class ThetaNonequilibriumIntegrator(ThetaIntegratorV1):
   """make a `ThetaIntegratorV1` with a Hamiltonian perturbation step on `lambda_global`"""
