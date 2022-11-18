@@ -39,7 +39,7 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
     self.addGlobalVariable("I",
       self._I.value_in_unit_system(unit.md_unit_system)) # moment of inertia of theta
     self.addGlobalVariable("omega", 0.) # randomize velocity
-    self.randomize_omega(**unused_kwargs)
+    self.randomize_omega(**kwargs)
     self.addGlobalVariable(self._theta_name, self._init_theta) # initialize the value of theta
 
   def _add_full_V_step(self, **kwargs):
