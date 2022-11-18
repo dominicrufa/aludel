@@ -60,7 +60,8 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
 
   def _add_constrain_R_fix_V(self, **kwargs):
     self.addComputePerDof("x1", "x")
-    self.addConstrainPositions("v", "v + (x - x1)/dt")
+    self.addConstrainPositions()
+    self.addComputePerDof("v", "v + (x - x1)/dt")
 
   def _add_body(self, **kwargs):
     self.addUpdateContextState() # need to do this
