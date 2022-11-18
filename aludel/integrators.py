@@ -51,7 +51,8 @@ class ThetaIntegratorV1(openmm.CustomIntegrator):
   def _add_half_R_step(self, **kwargs):
     self.addComputePerDof("x", "x + 0.5*dt*v")
     if self._include_theta_dynamics:
-      self.addComputeGlobal(self._theta_name, f"theta + 0.5*dt*omega")
+      self.addComputeGlobal('theta', f"theta + 0.5*dt*omega")
+      self.addComputeGlobal(self._theta_name, "theta")
 
   def _add_O_step(self, **kwargs):
     self.addComputePerDof("v", "a*v + b*sqrt(kT/m)*gaussian")
