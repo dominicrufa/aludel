@@ -75,8 +75,8 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
 class CustomNEQIntegrator(CustomLangevinMiddleIntegratorV2):
   """make a `ThetaIntegratorV1` with a Hamiltonian perturbation step on `lambda_global`"""
   def __init__(self, num_steps, *args, **kwargs):
-    super().__init__(*args, **kwargs)
     self._num_steps = num_steps
+    super().__init__(*args, **kwargs)
 
   def _add_global_variables(self, **kwargs):
     super()._add_global_variables(**kwargs)
