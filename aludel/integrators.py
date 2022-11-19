@@ -14,7 +14,8 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
   """
   def __init__(self,
     temperature: unit.Quantity, collision_rate: unit.Quantity, timestep: unit.Quantity,
-    inertial_moment: unit.Quantity, initial_theta: float, **unused_kwargs):
+    inertial_moment: unit.Quantity, initial_theta: float,
+    run_theta: bool=False, **unused_kwargs):
 
     super().__init__(timestep)
     from openmmtools.constants import kB
@@ -24,6 +25,7 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
     self._inertial_moment = inertial_moment
     self._kB = kB
     self._initial_theta = initial_theta
+    self._run_theta = run_theta
 
     self._add_global_variables(**unused_kwargs)
     self._add_body(**unused_kwargs)
@@ -34,9 +36,11 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
     self.addGlobalVariable("kT", self._kB*self._temperature);
 
     # for theta dynamics
-    self.addGlobalVariable("I", self._inertial_moment.value_in_unit_system(unit.md_unit_system))
-    self.addGlobalVariable("omega", 0.)
-    self.addGlobalVariable("theta", self._initial_theta)
+    if self._run_theta:
+      self.addGlobalVariable("I", self._inertial_moment.value_in_unit_system(unit.md_unit_system))
+      self.addGlobalVariable("omega", 0.)
+      self.addGlobalVariable("theta", self._initial_theta)
+
     self.addPerDofVariable("x1", 0);
 
   def _add_body(self, **unused_kwargs):
@@ -50,16 +54,19 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
   def _add_full_V(self, **unused_kwargs):
     self.addComputePerDof("v", "v + dt*f/m");
     self.addConstrainVelocities();
-    self.addComputeGlobal("omega", "omega - dt*deriv(energy, theta_global)/I")
+    if self._run_theta:
+      self.addComputeGlobal("omega", "omega - dt*deriv(energy, theta_global)/I")
 
   def _add_half_R(self, **unused_kwargs):
     self.addComputePerDof("x", "x + 0.5*dt*v");
-    self.addComputeGlobal("theta", "theta + 0.5*dt*omega")
-    self.addComputeGlobal("theta_global", "theta")
+    if self._run_theta:
+      self.addComputeGlobal("theta", "theta + 0.5*dt*omega")
+      self.addComputeGlobal("theta_global", "theta")
 
   def _add_O(self, **unused_kwargs):
     self.addComputePerDof("v", "a*v + b*sqrt(kT/m)*gaussian");
-    self.addComputeGlobal("omega", "a*omega + b*sqrt(kT/I)*gaussian")
+    if self._run_theta:
+      self.addComputeGlobal("omega", "a*omega + b*sqrt(kT/I)*gaussian")
 
   def _add_constrain_R_fix_V(self, **unused_kwargs):
     self.addComputePerDof("x1", "x");
@@ -70,7 +77,8 @@ class CustomLangevinMiddleIntegratorV2(openmm.CustomIntegrator):
     _val = np.sqrt(
       (self._kB*self._temperature/self._inertial_moment).value_in_unit_system(unit.md_unit_system)
       )*np.random.normal()
-    self.setGlobalVariableByName('omega', _val)
+    if self._run_theta:
+      self.setGlobalVariableByName('omega', _val)
 
 class CustomNEQIntegrator(CustomLangevinMiddleIntegratorV2):
   """make a `ThetaIntegratorV1` with a Hamiltonian perturbation step on `lambda_global`"""
