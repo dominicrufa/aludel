@@ -1,11 +1,11 @@
 """various utilities"""
 import os
 from openmm import unit
-from typing import Iterable, Any
+from typing import List, Any
 
 
-def maybe_params_as_unitless(parameters: Iterable) -> Iterable:
-  """translate an iterable of parameters (either unit.Quantity or not)
+def maybe_params_as_unitless(parameters: List) -> List:
+  """translate an List of parameters (either unit.Quantity or not)
   into ints/floats"""
   dummy_unit = type(1.*unit.nanometers)
   outs = []
@@ -16,7 +16,7 @@ def maybe_params_as_unitless(parameters: Iterable) -> Iterable:
       outs.append(param)
   return outs
 
-def sort_indices_to_str(indices: Iterable[int]) -> str:
+def sort_indices_to_str(indices: List[int]) -> str:
   sorted_indices = sorted(indices)
   return '.'.join([str(_q) for _q in sorted_indices])
 
@@ -75,7 +75,7 @@ def query_outdirs_from_perses(
     perses_base_dir: str,
     write_to_dir: str,
     outdir_prefix: str='out_',
-    specific_query_dirs: Iterable[str]=[],
+    specific_query_dirs: List[str]=[],
     out_topology_proposal_name: str='out-topology_proposals.pkl'):
     """
     a simple utility to extract the inputs to the `hsg.py` from a canonical
@@ -110,18 +110,18 @@ def query_outdirs_from_perses(
         return out_data
 
     if len(specific_query_dirs) > 0:
-        query_dir_iterable = specific_query_dirs
+        query_dir_List = specific_query_dirs
     else:
-        query_dir_iterable = []
-        query_dir_iterable_try = [_q for _q in
+        query_dir_List = []
+        query_dir_List_try = [_q for _q in
             os.listdir(perses_base_dir) if os.path.isdir(
             os.path.join(perses_base_dir, _q))]
-        for _dir_iterable in query_dir_iterable_try:
-            if len(_dir_iterable) > pref_len:
-                if _dir_iterable[:pref_len] == outdir_prefix:
-                    query_dir_iterable.append(_dir_iterable)
+        for _dir_List in query_dir_List_try:
+            if len(_dir_List) > pref_len:
+                if _dir_List[:pref_len] == outdir_prefix:
+                    query_dir_List.append(_dir_List)
 
-    for _dirpath in query_dir_iterable:
+    for _dirpath in query_dir_List:
         _query_pathname = os.path.join(perses_base_dir, _dirpath)
         _out_dict = _query_singular_dir(_query_pathname)
         compressed_pickle(os.path.join(
