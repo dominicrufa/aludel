@@ -3,7 +3,7 @@ import openmm
 from openmm import app, unit
 import numpy as np
 import copy
-from typing import Any, Tuple, Dict, Iterable, Callable
+from typing import Any, Tuple, Dict, Iterable, Callable, Set, List
 
 
 class SingleTopologyHybridValenceConverter(object):
@@ -17,6 +17,7 @@ class SingleTopologyHybridValenceConverter(object):
         "unique_selector = select(1-unique_old, lambda_global, 1-lambda_global);"]
     STATIC_VALENCE_TEMPLATE = ['U_valence_;']
     GLOBAL_PARAMETERS = {'lambda_global': 0, 'retain_uniques': 1.}
+
     VALENCE_FORCE_UTILS = {
         'HarmonicBondForce': {
             'addTerm': 'addBond',
@@ -62,7 +63,21 @@ class SingleTopologyHybridValenceConverter(object):
                  num_hybrid_particles: int,
                  unique_old_atoms: Iterable[int],
                  unique_new_atoms: Iterable[int],
+                 omission_sets: List[Set[int]] = None,
                  **kwargs):
+        """
+        from an `old/new_force`, `old/new_to_hybrid_map`, `num_hybrid_particles`, and `unique_old/new_atoms` create a
+        dictionary of hybrid static and dynamic forces. Canonically, the static
+        forces are independent of `lambda_global` whilst the dynamic forces are dependent.
+
+        Also, this class permits a `omission_sets` parameter. This parameter contains sets of `hybrid` indices
+        such that in the course of mapping new/old force valence terms to the hybrid valence forces, ask whether the
+        `hybrid` indices queried contain the subset of particle indices given in the parameter. If they match, the term
+        parameters are archived for later use and removed from the hybrid forces being generated.
+
+        This is particularly important for force generation that preserves dummy-mapped particle interactions and
+        linker/ring breaking.
+        """
         # assert that the forces match
         assert old_force.__class__.__name__ == new_force.__class__.__name__
         self._force_name = old_force.__class__.__name__
@@ -75,14 +90,51 @@ class SingleTopologyHybridValenceConverter(object):
         self._unique_old_atoms = unique_old_atoms
         self._unique_new_atoms = unique_new_atoms
         self._force_utils = self.VALENCE_FORCE_UTILS[self._force_name]
+        self._omission_sets = omission_sets
 
         self._hybrid_to_old_map = {val: key for key, val in self._old_to_hybrid_map.items()}
         self._hybrid_to_new_map = {val: key for key, val in self._new_to_hybrid_map.items()}
-        self._hybrid_forces = self._make_hybrid_forces(**kwargs)
+
+        # make hybrid forces
+        hybrid_forces = self._make_hybrid_forces(**kwargs)
+
+        # attempt to handle omissions
+        self._hybrid_forces, self._omission_data = self._handle_omissions(hybrid_forces, **kwargs)
 
     @property
     def hybrid_forces(self):
-        return copy.deepcopy(self._hybrid_forces)
+        out_force_name = self._hybrid_forces[0].__class__.__name__
+        return {out_force_name: copy.deepcopy(self._hybrid_forces)}
+
+    @property
+    def omission_data(self):
+        return copy.deepcopy(self._omission_data)
+
+    def _handle_omissions(self,
+                          _hybrid_forces: Dict[str, openmm.Force],
+                          **unused_kwargs):
+        """handle omissions in place"""
+        from aludel.utils import handle_omissions
+        modifier_dict = {}
+        for keystr, _force in _hybrid_forces.items():
+            query_num_terms_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['query_num_terms'])
+            query_params_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['query_params'])
+            set_term_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['setTerm'])
+            parameter_replacement_list = [0. for i in range(
+                len(self.VALENCE_FORCE_UTILS[self._force_name]['per_term_params'])*2 + 3)] # replacement params are 0s
+
+            mod_dict = handle_omissions(query_num_terms_method = query_num_terms_method,
+                                        query_params_method = query_params_method,
+                                        set_term_method = set_term_method,
+                                        parameter_replacement_list = parameter_replacement_list,
+                                        ** unused_kwargs)
+            modifier_dict[keystr] = mod_dict
+
+        return _hybrid_forces, modifier_dict
+
+
+
+
 
     def _make_custom_dynamic_expression(self, **unused_kwargs) -> str:
         """make the custom expression of the custom valence force"""
@@ -117,7 +169,7 @@ class SingleTopologyHybridValenceConverter(object):
         return per_term_parameters
 
     def _make_hybrid_forces(self, **unused_kwargs):
-        """main method that will create the hybrid force"""
+        """main method that will create the nested hybrid force dict; it has `static` and `dynamic` force objects"""
         from aludel.utils import maybe_params_as_unitless
         num_particles = self._force_utils['num_particles']
 
@@ -255,4 +307,4 @@ class SingleTopologyHybridValenceConverter(object):
             else:
                 _ = term_adder_fn_dynamic2(*_params)
 
-        return [U_out_static, U_out_dynamic2]
+        return {'static': U_out_static, 'dynamic': U_out_dynamic2}

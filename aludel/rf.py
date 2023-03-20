@@ -7,6 +7,7 @@ import copy
 from typing import Any, Tuple, Dict, List, Callable, List
 from aludel.utils import maybe_params_as_unitless
 
+
 class ReactionFieldConverter(object):
     """
     convert a canonical `openmm.System` object's `openmm.NonbondedForce`
@@ -17,11 +18,12 @@ class ReactionFieldConverter(object):
     https://github.com/rinikerlab/reeds/blob/\
     52882d7e009b5393df172dd4b703323f1d84dabb/reeds/openmm/reeds_openmm.py#L265
     """
+
     def __init__(self,
-                 system : openmm.System,
-                 cutoff: float=1.2,
-                 eps_rf: float=78.5,
-                 ONE_4PI_EPS0: float=138.93545764438198,
+                 system: openmm.System,
+                 cutoff: float = 1.2,
+                 eps_rf: float = 78.5,
+                 ONE_4PI_EPS0: float = 138.93545764438198,
                  **unused_kwargs,
                  ):
         """
@@ -37,7 +39,7 @@ class ReactionFieldConverter(object):
         import copy
 
         nbfs = [f for f in system.getForces() if f.__class__.__name__ \
-            == "NonbondedForce"]
+                == "NonbondedForce"]
         assert len(nbfs) == 1, f"{len(nbfs)} nonbonded forces were found"
 
         self._nbf = nbfs[0]
@@ -74,14 +76,14 @@ class ReactionFieldConverter(object):
         energy_fn += f"chargeprod_ = charge1 * charge2;"
 
         custom_nb_force = openmm.CustomNonbondedForce(energy_fn)
-        custom_nb_force.addPerParticleParameter('charge') # always add
+        custom_nb_force.addPerParticleParameter('charge')  # always add
 
         custom_nb_force.addPerParticleParameter('sigma')
         custom_nb_force.addPerParticleParameter('epsilon')
-        custom_nb_force.setNonbondedMethod(openmm.CustomNonbondedForce.\
-            CutoffPeriodic) # always
+        custom_nb_force.setNonbondedMethod(openmm.CustomNonbondedForce. \
+                                           CutoffPeriodic)  # always
         custom_nb_force.setCutoffDistance(self._cutoff)
-        custom_nb_force.setUseLongRangeCorrection(False) # for lj, never
+        custom_nb_force.setUseLongRangeCorrection(False)  # for lj, never
 
         # add particles
         for idx in range(self._nbf.getNumParticles()):
@@ -91,7 +93,7 @@ class ReactionFieldConverter(object):
         # add exclusions from nbf exceptions
         for idx in range(self._nbf.getNumExceptions()):
             j, k, _, _, _ = self._nbf.getExceptionParameters(idx)
-            custom_nb_force.addExclusion(j,k)
+            custom_nb_force.addExclusion(j, k)
         return custom_nb_force
 
     def handle_nb_exceptions(self):
@@ -103,7 +105,7 @@ class ReactionFieldConverter(object):
 
         # copy exceptions
         for idx in range(self._nbf.getNumExceptions()):
-            j, k , chargeprod, mix_sigma, mix_epsilon = self._nbf.\
+            j, k, chargeprod, mix_sigma, mix_epsilon = self._nbf. \
                 getExceptionParameters(idx)
 
             # now query charges, sigma, epsilon
@@ -111,7 +113,7 @@ class ReactionFieldConverter(object):
             c2, _, _ = self._nbf.getParticleParameters(k)
 
             custom_b_force.addBond(j, k,
-                                [chargeprod, mix_sigma, mix_epsilon, c1*c2])
+                                   [chargeprod, mix_sigma, mix_epsilon, c1 * c2])
 
         return custom_b_force
 
@@ -128,20 +130,20 @@ class ReactionFieldConverter(object):
 
         for i in range(self._nbf.getNumParticles()):
             ch1, _, _ = self._nbf.getParticleParameters(i)
-            force_crf_self_term.addBond(i, i, [ch1*ch1])
+            force_crf_self_term.addBond(i, i, [ch1 * ch1])
         return force_crf_self_term
 
     def _get_rf_terms(self):
         cutoff, eps_rf = self._cutoff, self._eps_rf
-        krf = ((eps_rf - 1) / (1 + 2 * eps_rf)) * (1 / cutoff**3)
+        krf = ((eps_rf - 1) / (1 + 2 * eps_rf)) * (1 / cutoff ** 3)
         mrf = 4
         nrf = 6
-        arfm = (3 * cutoff**(-(mrf+1))/(mrf*(nrf - mrf)))* \
-            ((2*eps_rf+nrf-1)/(1+2*eps_rf))
-        arfn = (3 * cutoff**(-(nrf+1))/(nrf*(mrf - nrf)))* \
-            ((2*eps_rf+mrf-1)/(1+2*eps_rf))
+        arfm = (3 * cutoff ** (-(mrf + 1)) / (mrf * (nrf - mrf))) * \
+               ((2 * eps_rf + nrf - 1) / (1 + 2 * eps_rf))
+        arfn = (3 * cutoff ** (-(nrf + 1)) / (nrf * (mrf - nrf))) * \
+               ((2 * eps_rf + mrf - 1) / (1 + 2 * eps_rf))
         crf = ((3 * eps_rf) / (1 + 2 * eps_rf)) * (1 / cutoff) + arfm * \
-            cutoff**mrf + arfn * cutoff ** nrf
+              cutoff ** mrf + arfn * cutoff ** nrf
         return (cutoff, eps_rf, krf, mrf, nrf, arfm, arfn, crf)
 
     def _get_energy_fn(self, exception=False):
@@ -153,7 +155,7 @@ class ReactionFieldConverter(object):
         (cutoff, eps_rf, krf, mrf, nrf, arfm, arfn, crf) = self._get_rf_terms()
 
         # define additive energy terms
-        #total_e = f"elec_e + lj_e;"
+        # total_e = f"elec_e + lj_e;"
         total_e = "lj_e + elec_e;"
         # total_e += "elec_e = ONE_4PI_EPS0*chargeprod*(1/r + krf*r2 + arfm*r4 + arfn*r6 - crf);"
         total_e += f"elec_e = ONE_4PI_EPS0*( chargeprod*(1/r) + chargeprod_*(krf*r2 + arfm*r4 + arfn*r6 - crf));"
@@ -176,16 +178,18 @@ class ReactionFieldConverter(object):
         total_e += "ONE_4PI_EPS0 = {:f};".format(self.ONE_4PI_EPS0)
         return total_e
 
+
 # Utility functions for HybridReactionFieldConverter
 
 def sort_indices_to_str(indices: List[int]) -> str:
     sorted_indices = sorted(indices)
     return '.'.join([str(_q) for _q in sorted_indices])
 
+
 def make_exception_dict(
-    old_nbf: openmm.NonbondedForce,
-    new_nbf: openmm.NonbondedForce, old_to_hybrid_map: Dict[int, int],
-    new_to_hybrid_map: Dict[int, int], **unused_kwargs) -> Dict[openmm.Force, Dict[str, int]]:
+        old_nbf: openmm.NonbondedForce,
+        new_nbf: openmm.NonbondedForce, old_to_hybrid_map: Dict[int, int],
+        new_to_hybrid_map: Dict[int, int], **unused_kwargs) -> Dict[openmm.Force, Dict[str, int]]:
     """retrieve a dictionary of sorted/stringed hybrid indices: original exception
     index for each force (old and new); it is generally implied that there is a
     _single_ exception between any two particles.
@@ -204,9 +208,10 @@ def make_exception_dict(
             exception_data[orig_force][sorted_hybrid_inds_str] = orig_exception_idx
     return exception_data
 
+
 def make_constraint_dict(old_system: openmm.System,
-    new_system: openmm.System, old_to_hybrid_map: Dict[int, int],
-    new_to_hybrid_map: Dict[int, int], **unused_kwargs) -> Dict[openmm.System, Dict[str, int]]:
+                         new_system: openmm.System, old_to_hybrid_map: Dict[int, int],
+                         new_to_hybrid_map: Dict[int, int], **unused_kwargs) -> Dict[openmm.System, Dict[str, int]]:
     """retrieve a dictionary of sorted/stringed hybrid_indices: original constraints
     index for each system (old/new);
     """
@@ -224,6 +229,7 @@ def make_constraint_dict(old_system: openmm.System,
             constraint_data[orig_sys][sorted_hybrid_inds_str] = orig_const_idx
     return constraint_data
 
+
 def are_nb_params_identical(oc, nc, os, ns, oe, ne, oc_=None, nc_=None, **unused_kwargs):
     """take a set of old/new charge, sigma, epsilon; return if they change"""
     if oc_ is None: assert nc_ is None, f"both aux c_s must be None if one is"
@@ -232,15 +238,16 @@ def are_nb_params_identical(oc, nc, os, ns, oe, ne, oc_=None, nc_=None, **unused
     eps_match = np.isclose(oe, ne)
     charge_und_match = True if oc_ is None else np.isclose(oc_, nc_)
 
-    if not charge_match: # if the charges do not match, fail
+    if not charge_match:  # if the charges do not match, fail
         return False
     if not charge_und_match:
         return False
-    if not eps_match: # if epsilons do not match, fail
+    if not eps_match:  # if epsilons do not match, fail
         return False
-    if not sigma_match: # epsilons are identical; if sigmas do not match, fail
+    if not sigma_match:  # epsilons are identical; if sigmas do not match, fail
         return False
     return True
+
 
 class SingleTopologyHybridNBFReactionFieldConverter():
     """In this `Converter` object, I am modifying the typical nonbonded and exception forces in-place.
@@ -294,7 +301,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         'softcore_d': 1.001,
         'softcore_e': 1.001,
         'softcore_f': 2.
-        }
+    }
 
     # Alchemical NB Exceptions
     NB_EXC_PARAMETERS = ['res_charge', 'res_charge_', 'res_sigma', 'res_epsilon']
@@ -312,20 +319,22 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                               'old_res_charge_', 'new_res_charge_',
                               'old_res_sigma', 'new_res_sigma',
                               'old_res_epsilon', 'new_res_epsilon']
+
     def __init__(self: Any,
-        old_nbf: openmm.NonbondedForce,
-        new_nbf: openmm.NonbondedForce,
-        old_to_hybrid_map: Dict[int, int],
-        new_to_hybrid_map: Dict[int, int],
-        num_hybrid_particles: int,
-        unique_old_atoms: List[int],
-        unique_new_atoms: List[int],
-        constraints_dict: Dict[openmm.System, Dict[str, int]]=None,
-        cutoff: float=1.2,
-        eps_rf: float=78.5,
-        ONE_4PI_EPS0: float=138.93545764438198,
-        allow_false_unique_exceptions: bool=True,
-        **kwargs):
+                 old_nbf: openmm.NonbondedForce,
+                 new_nbf: openmm.NonbondedForce,
+                 old_to_hybrid_map: Dict[int, int],
+                 new_to_hybrid_map: Dict[int, int],
+                 num_hybrid_particles: int,
+                 unique_old_atoms: List[int],
+                 unique_new_atoms: List[int],
+                 constraints_dict: Dict[openmm.System, Dict[str, int]] = None,
+                 cutoff: float = 1.2,
+                 eps_rf: float = 78.5,
+                 ONE_4PI_EPS0: float = 138.93545764438198,
+                 omission_sets: List[Set[int]] = None,
+                 allow_false_unique_exceptions: bool = True,
+                 **kwargs):
 
         self._old_nbf = old_nbf
         self._new_nbf = new_nbf
@@ -339,29 +348,55 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         self.ONE_4PI_EPS0 = ONE_4PI_EPS0
         self._allow_false_unique_exceptions = allow_false_unique_exceptions
         self._constraints_dict = constraints_dict
+        self._omission_sets = omission_sets
 
-        self._hybrid_to_old_map = {val:key for key, val in self._old_to_hybrid_map.items()}
-        self._hybrid_to_new_map = {val:key for key, val in self._new_to_hybrid_map.items()}
+        self._hybrid_to_old_map = {val: key for key, val in self._old_to_hybrid_map.items()}
+        self._hybrid_to_new_map = {val: key for key, val in self._new_to_hybrid_map.items()}
 
-        self._custom_nbf = self.handle_nonbonded_pairs(**kwargs)
-        self._custom_bfs = self.make_exceptions(**kwargs)
+        self._custom_nbfs = self.handle_nonbonded_pairs(**kwargs)
+        custom_bfs = self.make_exceptions(**kwargs)
         self._self_bf = self.make_self_force(**kwargs)
+
+        # handle omissions (only with the `custom_bfs`)
+        self._custom_bfs, self._omission_data = self._handle_omissions(custom_bfs, **kwargs)
 
     @property
     def rf_forces(self):
-        outs = []
-        for _force in self._custom_nbf:
-            outs.append(copy.deepcopy(_force))
-        for _force in self._custom_bfs:
-            outs.append(copy.deepcopy(_force))
-        outs.append(self._self_bf)
-        return outs
+        """retrieve a nested dict of `Force.__class__.__name`: Dict[`type`<str>: `openmm.Force`]"""
+        # custombondedforces are handled in a special way
+        custom_bf_forces = copy.deepcopy(self._custom_bfs)
+        custom_bf_forces.update(copy.deepcopy(self._self_bf))
+
+        # make out dict
+        out_dict = {'CustomNonbondedForce': copy.deepcopy(self._custom_nbfs),
+                    'CustomBondForce': custom_bf_forces}
+
+        return out_dict
+
+    def _handle_omissions(self, cbf_dict: Dict[str, openmm.Force], **kwargs):
+        """handle omissions in place; these are only handled for the `CustomBondForce` objects"""
+        from aludel.utils import handle_omissions
+        modifier_dict = {}
+        for keystr, _force in cbf_dict.items():
+            query_num_terms_method = _force.getNumBonds
+            query_params_method = _force.GetBondParameters
+            set_term_method = _force.SetBondParameters
+            parameter_replacement_list = [0.]*4 if keystr == 'static' else [0.]*8
+            mod_dict = handle_omissions(query_num_terms_method=query_num_terms_method,
+                                        query_params_method=query_params_method,
+                                        set_term_method=set_term_method,
+                                        parameter_replacement_list=parameter_replacement_list,
+                                        **kwargs)
+            modifier_dict[keystr] = mod_dict
+
+        return cbf_dict, modifier_dict
+
 
     def make_blank_nbf(self, **kwargs):
         nbf = openmm.CustomNonbondedForce('')
         nbf.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic)
         nbf.setCutoffDistance(self._cutoff)
-        nbf.setUseLongRangeCorrection(False) # do I want to hardcode this?
+        nbf.setUseLongRangeCorrection(False)  # do I want to hardcode this?
         return nbf
 
     def _make_consistent_exclusions(self, nbf_list, **unused_kwargs):
@@ -393,7 +428,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                     excl_idx = nbf.addExclusion(unique_new_hybr_idx, unique_old_hybr_idx)
 
     def handle_nonbonded_pairs(self, **kwargs):
-        """generate two `openmm.CustomNonbondedForce` objects.
+        """generate a dict of `openmm.CustomNonbondedForce` objects.
         1. independent of all global parameters; nonbonded interactions
             that do not involve parameter changes
         2. dependent on global parameters; includes nonbonded that involve parameter changes
@@ -480,19 +515,19 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         lam_dep_nbf.addInteractionGroup(nonenv_interaction_group, env_interaction_group)
         lam_dep_nbf.addInteractionGroup(nonenv_interaction_group, nonenv_interaction_group)
 
-        return lam_indep_nbf, lam_dep_nbf
+        return {'static': lam_indep_nbf, 'dynamic': lam_dep_nbf}
 
     def make_exceptions(self, **unused_kwargs):
-        """make the unique and mapped exception `openmm.CustomBondForce` objects to accommodate nonbonded exclusions
-        in the `openmm.CustomNonbondedForce` objects.
+        """make a dict of unique and mapped exception `openmm.CustomBondForce` objects to
+        accommodate nonbonded exclusions in the `openmm.CustomNonbondedForce` objects.
 
         There are 3 custom bond Forces here.
-        1. The first is independent of lambda global, does not contain any unique particles, nor includes softcores;
+        1. `static` is independent of lambda global, does not contain any unique particles, nor includes softcores;
             this is specific to interactions that are retained in both systems.
-        2. The second is dependent on lambda global and exclusively contains unique interactions;
+        2. `dynamic_unique` is dependent on lambda global and exclusively contains unique interactions;
             it is technically dependent on lambda_global because it is used in energy validation checks, but
             it is softcored.
-        3. The third is dependent on lambda global and contains all mapped exceptions in new/old systems;
+        3. `dynamic_mapped` is dependent on lambda global and contains all mapped exceptions in new/old systems;
             it is only softcored if the interaction goes to zero at one endstate.
         """
         hybrid_to_old_map = self._hybrid_to_old_map
@@ -623,45 +658,45 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                                old_sigma, new_sigma, old_epsilon, new_epsilon]
                     _ = lam_dep_cbf.addBond(*hybrid_inds, _params)
 
-        return [lam_dep_cbf, lam_indep_cbf, lam_dep_unique_cbf]
+        return {'static': lam_indep_cbf, 'dynamic_unique': lam_dep_unique_cbf, 'dynamic_mapped': lam_dep_cbf}
 
     def _get_aux_self_terms(self, **kwargs):
         """get the self term"""
         aux_template = ["0.5*{ONE_4PI_EPS0}*chargeprod_*(-{crf});"
-            "chargeprod_ = old_chargeprod_ + lambda_global*(new_chargeprod_ - old_chargeprod_);"]
+                        "chargeprod_ = old_chargeprod_ + lambda_global*(new_chargeprod_ - old_chargeprod_);"]
         perBondParameters = ['old_chargeprod_', 'new_chargeprod_']
         global_parameters = {}
         return aux_template, perBondParameters, global_parameters
 
-
     def _get_rf_terms(self, **unused_kwargs):
         """return a dict of reaction field terms."""
         cutoff, eps_rf = self._cutoff, self._eps_rf
-        krf = ((eps_rf - 1) / (1 + 2 * eps_rf)) * (1 / cutoff**3)
+        krf = ((eps_rf - 1) / (1 + 2 * eps_rf)) * (1 / cutoff ** 3)
         mrf = 4
         nrf = 6
-        arfm = (3 * cutoff**(-(mrf+1))/(mrf*(nrf - mrf)))* \
-            ((2*eps_rf+nrf-1)/(1+2*eps_rf))
-        arfn = (3 * cutoff**(-(nrf+1))/(nrf*(mrf - nrf)))* \
-            ((2*eps_rf+mrf-1)/(1+2*eps_rf))
+        arfm = (3 * cutoff ** (-(mrf + 1)) / (mrf * (nrf - mrf))) * \
+               ((2 * eps_rf + nrf - 1) / (1 + 2 * eps_rf))
+        arfn = (3 * cutoff ** (-(nrf + 1)) / (nrf * (mrf - nrf))) * \
+               ((2 * eps_rf + mrf - 1) / (1 + 2 * eps_rf))
         crf = ((3 * eps_rf) / (1 + 2 * eps_rf)) * (1 / cutoff) + arfm * \
-            cutoff**mrf + arfn * cutoff ** nrf
+              cutoff ** mrf + arfn * cutoff ** nrf
         out_dict = {'krf': krf, 'mrf': mrf, 'nrf': nrf,
-            'arfm': arfm, 'arfn': arfn, 'crf': crf,
-            'ONE_4PI_EPS0': self.ONE_4PI_EPS0, 'r_cut': self._cutoff}
+                    'arfm': arfm, 'arfn': arfn, 'crf': crf,
+                    'ONE_4PI_EPS0': self.ONE_4PI_EPS0, 'r_cut': self._cutoff}
         return out_dict
 
     def make_self_force(self, **unused_kwargs):
-        bf = openmm.CustomBondForce('') # space filler for expression
+        """create the `self` force in a dict to account for particle particle partial charges."""
+        bf = openmm.CustomBondForce('')  # space filler for expression
         rf_terms = self._get_rf_terms(**unused_kwargs)
         bf.setUsesPeriodicBoundaryConditions(True)
 
         aux_template, perBondParameters, global_parameters = self._get_aux_self_terms(**unused_kwargs)
-        for bond_param in perBondParameters: # add per particle params
+        for bond_param in perBondParameters:  # add per particle params
             bf.addPerBondParameter(bond_param)
         all_global_params = copy.deepcopy(self.NB_GLOBAL_PARAMETERS)
         all_global_params.update(global_parameters)
-        for gp_name, gp_val in all_global_params.items(): # add global params
+        for gp_name, gp_val in all_global_params.items():  # add global params
             bf.addGlobalParameter(gp_name, gp_val)
         energy_fn = ' '.join(aux_template).format(**rf_terms)
         bf.setEnergyFunction(energy_fn)
@@ -671,12 +706,12 @@ class SingleTopologyHybridNBFReactionFieldConverter():
             try:
                 old_c1, _, _ = self._old_nbf.getParticleParameters(
                     self._hybrid_to_old_map[i])
-            except: # it's unique new
-                    old_c1 = 0.
+            except:  # it's unique new
+                old_c1 = 0.
             try:
                 new_c1, _, _ = self._new_nbf.getParticleParameters(
-                self._hybrid_to_new_map[i])
-            except: # it's unique old
+                    self._hybrid_to_new_map[i])
+            except:  # it's unique old
                 new_c1 = 0.
-            _ = bf.addBond(i, i, [old_c1*old_c1, new_c1*new_c1])
-        return bf
+            _ = bf.addBond(i, i, [old_c1 * old_c1, new_c1 * new_c1])
+        return {'self': bf}
