@@ -4,7 +4,7 @@ import openmm
 from openmm import app, unit
 import numpy as np
 import copy
-from typing import Any, Tuple, Dict, List, Callable, List
+from typing import Any, Tuple, Dict, List, Callable, Set
 from aludel.utils import maybe_params_as_unitless
 
 
@@ -43,8 +43,9 @@ class ReactionFieldConverter(object):
         assert len(nbfs) == 1, f"{len(nbfs)} nonbonded forces were found"
 
         self._nbf = nbfs[0]
+        self._is_periodic = self._nbf.usesPeriodicBoundaryConditions()  # whether it uses pbcs...
         self._system = system
-        self._cutoff = cutoff
+        self._cutoff = cutoff if self._is_periodic else 99.
         self._eps_rf = eps_rf
         self.ONE_4PI_EPS0 = ONE_4PI_EPS0
 
@@ -80,8 +81,10 @@ class ReactionFieldConverter(object):
 
         custom_nb_force.addPerParticleParameter('sigma')
         custom_nb_force.addPerParticleParameter('epsilon')
-        custom_nb_force.setNonbondedMethod(openmm.CustomNonbondedForce. \
-                                           CutoffPeriodic)  # always
+
+        nb_method = openmm.CustomNonbondedForce.CutoffPeriodic if \
+            self._is_periodic else openmm.CustomNonbondedForce.NoCutoff
+        custom_nb_force.setNonbondedMethod(nb_method)
         custom_nb_force.setCutoffDistance(self._cutoff)
         custom_nb_force.setUseLongRangeCorrection(False)  # for lj, never
 
@@ -126,7 +129,8 @@ class ReactionFieldConverter(object):
 
         force_crf_self_term = openmm.CustomBondForce(crf_self_term)
         force_crf_self_term.addPerBondParameter('chargeprod_')
-        force_crf_self_term.setUsesPeriodicBoundaryConditions(True)
+
+        force_crf_self_term.setUsesPeriodicBoundaryConditions(self._is_periodic)
 
         for i in range(self._nbf.getNumParticles()):
             ch1, _, _ = self._nbf.getParticleParameters(i)
@@ -253,7 +257,11 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     """In this `Converter` object, I am modifying the typical nonbonded and exception forces in-place.
     Each force will be duplicated. For each force object, there will be one force that is absolutely immutable w.r.t.
     `lambda_global` and one force that is tethered so that we can get a speedup and
-    only have to re-evaluate certain force objects"""
+    only have to re-evaluate certain force objects.
+
+    NOTE: there should not be omissions to this object because 1-4 terms are _always_ interpolated, unlike valence force,
+    of which, terms containing unique particles are typically retained (as is typical of RBFEs)
+    """
 
     NB_PAIR_TEMPLATE = ['lj_e * step({r_cut} - reff_lj) + elec_e;',
                         "elec_e = elec_term1 + elec_term2;",
@@ -332,33 +340,29 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                  cutoff: float = 1.2,
                  eps_rf: float = 78.5,
                  ONE_4PI_EPS0: float = 138.93545764438198,
-                 omission_sets: List[Set[int]] = None,
                  allow_false_unique_exceptions: bool = True,
                  **kwargs):
 
         self._old_nbf = old_nbf
         self._new_nbf = new_nbf
+        self._is_periodic = self._old_nbf.usesPeriodicBoundaryConditions()
         self._old_to_hybrid_map = old_to_hybrid_map
         self._new_to_hybrid_map = new_to_hybrid_map
         self._num_hybrid_particles = num_hybrid_particles
         self._unique_old_atoms = unique_old_atoms
         self._unique_new_atoms = unique_new_atoms
-        self._cutoff = cutoff
+        self._cutoff = cutoff if self._is_periodic else 99.
         self._eps_rf = eps_rf
         self.ONE_4PI_EPS0 = ONE_4PI_EPS0
         self._allow_false_unique_exceptions = allow_false_unique_exceptions
         self._constraints_dict = constraints_dict
-        self._omission_sets = omission_sets
 
         self._hybrid_to_old_map = {val: key for key, val in self._old_to_hybrid_map.items()}
         self._hybrid_to_new_map = {val: key for key, val in self._new_to_hybrid_map.items()}
 
         self._custom_nbfs = self.handle_nonbonded_pairs(**kwargs)
-        custom_bfs = self.make_exceptions(**kwargs)
+        self._custom_bfs = self.make_exceptions(**kwargs)
         self._self_bf = self.make_self_force(**kwargs)
-
-        # handle omissions (only with the `custom_bfs`)
-        self._custom_bfs, self._omission_data = self._handle_omissions(custom_bfs, **kwargs)
 
     @property
     def rf_forces(self):
@@ -373,28 +377,11 @@ class SingleTopologyHybridNBFReactionFieldConverter():
 
         return out_dict
 
-    def _handle_omissions(self, cbf_dict: Dict[str, openmm.Force], **kwargs):
-        """handle omissions in place; these are only handled for the `CustomBondForce` objects"""
-        from aludel.utils import handle_omissions
-        modifier_dict = {}
-        for keystr, _force in cbf_dict.items():
-            query_num_terms_method = _force.getNumBonds
-            query_params_method = _force.GetBondParameters
-            set_term_method = _force.SetBondParameters
-            parameter_replacement_list = [0.]*4 if keystr == 'static' else [0.]*8
-            mod_dict = handle_omissions(query_num_terms_method=query_num_terms_method,
-                                        query_params_method=query_params_method,
-                                        set_term_method=set_term_method,
-                                        parameter_replacement_list=parameter_replacement_list,
-                                        **kwargs)
-            modifier_dict[keystr] = mod_dict
-
-        return cbf_dict, modifier_dict
-
-
     def make_blank_nbf(self, **kwargs):
         nbf = openmm.CustomNonbondedForce('')
-        nbf.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic)
+        nb_method = openmm.CustomNonbondedForce.CutoffPeriodic if \
+            self._is_periodic else openmm.CustomNonbondedForce.NoCutoff
+        nbf.setNonbondedMethod(nb_method)
         nbf.setCutoffDistance(self._cutoff)
         nbf.setUseLongRangeCorrection(False)  # do I want to hardcode this?
         return nbf
@@ -689,7 +676,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         """create the `self` force in a dict to account for particle particle partial charges."""
         bf = openmm.CustomBondForce('')  # space filler for expression
         rf_terms = self._get_rf_terms(**unused_kwargs)
-        bf.setUsesPeriodicBoundaryConditions(True)
+        bf.setUsesPeriodicBoundaryConditions(self._is_periodic)
 
         aux_template, perBondParameters, global_parameters = self._get_aux_self_terms(**unused_kwargs)
         for bond_param in perBondParameters:  # add per particle params

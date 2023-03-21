@@ -2,7 +2,7 @@ import openmm
 from openmm import app, unit
 import numpy as np
 import copy
-from typing import Any, Tuple, Dict, Iterable, Callable
+from typing import Any, Tuple, Dict, Iterable, Callable, List, Set
 from aludel.utils import maybe_params_as_unitless, sort_indices_to_str
 
 
@@ -265,9 +265,10 @@ class BaseSingleTopologyHybridSystemFactory(object):
     def hybrid_system(self):
         """iterate over the `self._hybrid_forces_dict` (nested) and add the forces to the `hybrid_system`"""
         duplicate_hybrid_system = copy.deepcopy(self._hybrid_system)
-        for forcename, nested_dict in self._hybrid_forces_dict.items():
-            out_forces = [copy.deepcopy(x) for x in list(nested_dict.values())]
-            _ = [duplicate_hybrid_system.addForce(x) for x in out_forces]
+        for original_forcename, nested_force_dict in self._hybrid_forces_dict.items():
+            for hybrid_force_name, specifier_force_dict in nested_force_dict.items():
+                out_forces = [copy.deepcopy(x) for x in list(specifier_force_dict.values())]
+                _ = [duplicate_hybrid_system.addForce(x) for x in out_forces]
 
         return duplicate_hybrid_system
 
@@ -279,7 +280,7 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
     WARNING: this operation can expect to take ~15s in complex phase.
     """
 
-    def __init__(self, *args, omission_sets: List[Set[int]]=None, **kwargs):
+    def __init__(self, *args, omission_sets: List[Set[int]]=[], **kwargs):
         self._omission_sets = omission_sets
         super().__init__(*args, **kwargs)
 
@@ -308,10 +309,10 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
                     num_hybrid_particles=self._hybrid_system.getNumParticles(),
                     unique_old_atoms=self._unique_old_atoms,
                     unique_new_atoms=self._unique_new_atoms,
-                    omission_sets=self._omission_sets
+                    omission_sets=self._omission_sets,
                     **kwargs)
                 out_force_dict = valence_hbf_factory.hybrid_forces  # `static` and `dynamic` keys by default
-                self._hybrid_forces_dict.update(out_force_dict)
+                self._hybrid_forces_dict[forcename] = out_force_dict
                 self._force_factories[forcename] = valence_hbf_factory
 
         if 'NonbondedForce' in joint_forcenames:
@@ -323,11 +324,10 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
                 num_hybrid_particles=self._hybrid_system.getNumParticles(),
                 unique_old_atoms=self._unique_old_atoms,
                 unique_new_atoms=self._unique_new_atoms,
-                omission_sets=self._omission_sets
                 **kwargs)
             hybrid_rf_nbfs = nb_converter_factory.rf_forces
-            self._hybrid_forces_dict.update(hybrid_rf_nbfs)
-            self._force_factories[forcename] = nb_converter_factory
+            self._hybrid_forces_dict['NonbondedForce'] = hybrid_rf_nbfs
+            self._force_factories['NonbondedForce'] = nb_converter_factory
 
     def _make_rf_systems(self, **kwargs):
         """internal utility to make reaction-field systems

@@ -63,7 +63,7 @@ class SingleTopologyHybridValenceConverter(object):
                  num_hybrid_particles: int,
                  unique_old_atoms: Iterable[int],
                  unique_new_atoms: Iterable[int],
-                 omission_sets: List[Set[int]] = None,
+                 omission_sets: List[Set[int]] = [],
                  **kwargs):
         """
         from an `old/new_force`, `old/new_to_hybrid_map`, `num_hybrid_particles`, and `unique_old/new_atoms` create a
@@ -103,7 +103,7 @@ class SingleTopologyHybridValenceConverter(object):
 
     @property
     def hybrid_forces(self):
-        out_force_name = self._hybrid_forces[0].__class__.__name__
+        out_force_name = list(self._hybrid_forces.values())[0].__class__.__name__
         return {out_force_name: copy.deepcopy(self._hybrid_forces)}
 
     @property
@@ -127,13 +127,11 @@ class SingleTopologyHybridValenceConverter(object):
                                         query_params_method = query_params_method,
                                         set_term_method = set_term_method,
                                         parameter_replacement_list = parameter_replacement_list,
+                                        omission_sets = self._omission_sets,
                                         ** unused_kwargs)
             modifier_dict[keystr] = mod_dict
 
         return _hybrid_forces, modifier_dict
-
-
-
 
 
     def _make_custom_dynamic_expression(self, **unused_kwargs) -> str:

@@ -28,7 +28,7 @@ def handle_omissions(query_num_terms_method: Callable[[None], int], query_params
     Note: by default, the `parameter_replacement_list` is `None`, so we do not modify the force in-place, just query
     the term indices that _would_ be modified"""
     out_dict = {} # make an empty out dict
-    is_replacement_none = parameter_replacement_list is None # query whether the replacement is `None`
+    is_replacement_none = parameter_replacement_list is None  # query whether the replacement is `None`
     if len(omission_sets) == 0: # if the omission set is empty, return by default
         return out_dict
     if len(omission_sets) == 1: # if the omission set only has 1 entry, get the set
