@@ -45,7 +45,7 @@ def handle_omissions(query_num_terms_method: Callable[[None], int], query_params
             truths = [_set.issubset(set(particle_indices)) for _set in omission_sets] # ask if we are a subset
             if any(truths): # if there is a match, record and mod the params
                 out_dict[term_idx] = all_params
-                _ = set_term_method(*particle_indices, params)
+                _ = set_term_method(term_idx, *particle_indices, params) # need to add term index _and_ particle indices
     return out_dict
 
 

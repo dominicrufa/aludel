@@ -23,6 +23,7 @@ class SingleTopologyHybridValenceConverter(object):
             'addTerm': 'addBond',
             'setTerm': 'setBondParameters',
             'query_num_terms': 'getNumBonds',
+            'query_num_per_term_params': 'getNumPerBondParameters',
             'query_params': 'getBondParameters',
             'custom_force': openmm.CustomBondForce,
             'num_particles': 2,
@@ -34,6 +35,7 @@ class SingleTopologyHybridValenceConverter(object):
             'addTerm': 'addAngle',
             'setTerm': 'setAngleParameters',
             'query_num_terms': 'getNumAngles',
+            'query_num_per_term_params': 'getNumPerAngleParameters',
             'query_params': 'getAngleParameters',
             'custom_force': openmm.CustomAngleForce,
             'num_particles': 3,
@@ -45,6 +47,7 @@ class SingleTopologyHybridValenceConverter(object):
             'addTerm': 'addTorsion',
             'setTerm': 'setTorsionParameters',
             'query_num_terms': 'getNumTorsions',
+            'query_num_per_term_params': 'getNumPerTorsionParameters',
             'query_params': 'getTorsionParameters',
             'custom_force': openmm.CustomTorsionForce,
             'num_particles': 4,
@@ -120,19 +123,18 @@ class SingleTopologyHybridValenceConverter(object):
             query_num_terms_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['query_num_terms'])
             query_params_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['query_params'])
             set_term_method = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['setTerm'])
-            parameter_replacement_list = [0. for i in range(
-                len(self.VALENCE_FORCE_UTILS[self._force_name]['per_term_params'])*2 + 3)] # replacement params are 0s
+            num_per_term_params = getattr(_force, self.VALENCE_FORCE_UTILS[self._force_name]['query_num_per_term_params'])()
+            parameter_replacement_list = [0.]*num_per_term_params  # replacement params are 0s
 
-            mod_dict = handle_omissions(query_num_terms_method = query_num_terms_method,
-                                        query_params_method = query_params_method,
-                                        set_term_method = set_term_method,
-                                        parameter_replacement_list = parameter_replacement_list,
-                                        omission_sets = self._omission_sets,
-                                        ** unused_kwargs)
+            mod_dict = handle_omissions(query_num_terms_method=query_num_terms_method,
+                                        query_params_method=query_params_method,
+                                        set_term_method=set_term_method,
+                                        parameter_replacement_list=parameter_replacement_list,
+                                        omission_sets=self._omission_sets,
+                                        **unused_kwargs)
             modifier_dict[keystr] = mod_dict
 
         return _hybrid_forces, modifier_dict
-
 
     def _make_custom_dynamic_expression(self, **unused_kwargs) -> str:
         """make the custom expression of the custom valence force"""
