@@ -336,7 +336,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                  num_hybrid_particles: int,
                  unique_old_atoms: List[int],
                  unique_new_atoms: List[int],
-                 constraints_dict: Dict[openmm.System, Dict[str, int]] = None,
+                 constraints_dict: Dict[openmm.System, Dict[Tuple[int], float]] = {},
                  cutoff: float = 1.2,
                  eps_rf: float = 78.5,
                  ONE_4PI_EPS0: float = 138.93545764438198,
@@ -510,12 +510,14 @@ class SingleTopologyHybridNBFReactionFieldConverter():
 
         There are 3 custom bond Forces here.
         1. `static` is independent of lambda global, does not contain any unique particles, nor includes softcores;
-            this is specific to interactions that are retained in both systems.
+            this is specific to interactions that are retained in both systems and are not distance-constrained.
         2. `dynamic_unique` is dependent on lambda global and exclusively contains unique interactions;
             it is technically dependent on lambda_global because it is used in energy validation checks, but
             it is softcored.
         3. `dynamic_mapped` is dependent on lambda global and contains all mapped exceptions in new/old systems;
             it is only softcored if the interaction goes to zero at one endstate.
+        4. `static_constraint` is independent of lambda global with the same functional form as `static`;
+            this is specific to interactions that are retained in both systems and are distance-constrained
         """
         hybrid_to_old_map = self._hybrid_to_old_map
         hybrid_to_new_map = self._hybrid_to_new_map
@@ -526,10 +528,10 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         lam_indep_cbf = openmm.CustomBondForce('')
         lam_dep_cbf = openmm.CustomBondForce('')
         lam_unique_cbf = openmm.CustomBondForce('')
+        constraint_cbf = openmm.CustomBondForce('')
 
         # lam_indep_cbf first
-        lam_indep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
-                                         + self.NB_STANDARD_REFF_TEMPLATE).format(**rf_terms)
+        lam_indep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE + self.NB_STANDARD_REFF_TEMPLATE).format(**rf_terms)
         lam_indep_cbf.setEnergyFunction(lam_indep_energy_expr)
         for param in self.NB_EXC_PARAMETERS:  # per bond parameters
             lam_indep_cbf.addPerBondParameter(param)
@@ -546,6 +548,15 @@ class SingleTopologyHybridNBFReactionFieldConverter():
 
         # lam_dep_unique_cbf; identical to `lam_dep_cbf`; only separating it for bookkeeping reasons
         lam_dep_unique_cbf = copy.deepcopy(lam_dep_cbf)
+
+        # constraint cbf
+        constraint_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE).format(**rf_terms)
+        constraint_energy_expr = constraint_energy_expr.replace('r^', 'reff_q^') # make the expression independent of r
+        constraint_cbf.setEnergyFunction(constraint_energy_expr)
+
+        per_bond_params = self.NB_EXC_PARAMETERS + ['reff_lj', 'reff_q']
+        for param in per_bond_params:
+            _ = constraint_cbf.addPerBondParameter(param)
 
         # first, get the exception data to query later.
         exception_data = make_exception_dict(old_nbf=self._old_nbf,
@@ -621,9 +632,15 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                         identical = are_nb_params_identical(oc=old_charge, nc=new_charge,
                                                             os=old_sigma, ns=new_sigma, oe=old_epsilon, ne=new_epsilon,
                                                             oc_=old_charge_, nc_=new_charge_)
-                        if identical:  # place into lam_indep_cbf
-                            _ = lam_indep_cbf.addBond(*hybrid_inds,
-                                                      [old_charge, old_charge_, old_sigma, old_epsilon])
+                        if identical:  # place into either lam_indep_cbf or constraint_cbf
+                            constraint_len = self._constraints_dict.get(tuple(sorted(hybrid_inds)), -1)
+                            if constraint_len < 0: # there is no constraint match; place in `lam_indep_cbf`
+                                _ = lam_indep_cbf.addBond(*hybrid_inds,
+                                                          [old_charge, old_charge_, old_sigma, old_epsilon])
+                            else:
+                                _ = constraint_cbf.addBond(*hybrid_inds,
+                                                           [old_charge, old_charge_, old_sigma, old_epsilon,
+                                                            constraint_len, constraint_len]) # constraint lengths are given plainly
                         else:
                             _ = lam_dep_cbf.addBond(*hybrid_inds,
                                                     [old_charge, new_charge, old_charge_, new_charge_,
@@ -645,7 +662,9 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                                old_sigma, new_sigma, old_epsilon, new_epsilon]
                     _ = lam_dep_cbf.addBond(*hybrid_inds, _params)
 
-        return {'static': lam_indep_cbf, 'dynamic_unique': lam_dep_unique_cbf, 'dynamic_mapped': lam_dep_cbf}
+        out_force_dict = {'static': lam_indep_cbf, 'dynamic_unique': lam_dep_unique_cbf, 'dynamic_mapped': lam_dep_cbf,
+                          'static_constraint': constraint_cbf}
+        return out_force_dict
 
     def _get_aux_self_terms(self, **kwargs):
         """get the self term"""
