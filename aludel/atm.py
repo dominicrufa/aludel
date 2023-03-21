@@ -218,23 +218,23 @@ class BaseSingleTopologyHybridSystemFactory(object):
 
     def _handle_constraints(self, **unused_kwargs):
         """copy constraints; check to make sure it doesn't change"""
-        self._constraint_dict = {}
+        self._constraints_dict = {}
         for system_name in ['old', 'new']:
             sys = getattr(self, f"_{system_name}_system")
             hybrid_map = getattr(self, f"_{system_name}_to_hybrid_map")
             for constraint_idx in range(sys.getNumConstraints()):
                 a1, a2, const_length = sys.getConstraintParameters(constraint_idx)
-                length = length.value_in_unit_system(unit.md_unit_system)
+                length = const_length.value_in_unit_system(unit.md_unit_system)
                 hybr_atoms = tuple(sorted([hybrid_map[a1], hybrid_map[a2]]))
-                if hybr_atoms not in self._constraint_dict.keys():
+                if hybr_atoms not in self._constraints_dict.keys():
                     self._hybrid_system.addConstraint(*hybr_atoms, length)
-                    self._constraint_dict[hybr_atoms] = length
+                    self._constraints_dict[hybr_atoms] = length
                 else:
-                    if not np.isclose(self._constraint_dict[hybr_atoms], length):
+                    if not np.isclose(self._constraints_dict[hybr_atoms], length):
                         raise Exception(f"""
                         Constraint length is changing for atoms {hybr_atoms}
                         in hybrid system: old is
-                        {self._constraint_dict[hybr_atoms]} and new is
+                        {self._constraints_dict[hybr_atoms]} and new is
                         {length}
                         """)
 
