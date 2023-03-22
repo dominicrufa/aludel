@@ -10,6 +10,7 @@ from typing import Callable, Dict, Iterable, Tuple, Any
 from rdkit import Chem
 from openff.toolkit.topology import Molecule
 from openmm import unit, app
+from copy import deepcopy
 
 
 def Molecule_from_sdf(sdf, **unused_kwargs):
@@ -91,6 +92,8 @@ def new_to_old_distance_mapper(old_mol_positions: np.array,
 
 def repair_constraint_mapping(
         new_to_old_map: Dict[int, int],
+        unique_olds: List[int],
+        unique_news: List[int],
         old_ligand_system: openmm.System,
         new_ligand_system: openmm.System,
         old_ligand_topology: openmm.app.Topology,
@@ -99,13 +102,17 @@ def repair_constraint_mapping(
     """if the system is parameterized using HBond constraints,
     it is necessary to 'repair' the initial atom map after parameterization
     by demapping hydrogen atoms where the constraint of the bond changes"""
-    from copy import deepcopy
-    out_new_to_old_atom_map = deepcopy(new_to_old)
 
-    # get old/new hydrogems
+    # make a copy of the original new to old atom map
+    out_new_to_old_atom_map = deepcopy(new_to_old_map)
+    out_unique_olds = deepcopy(unique_olds)
+    out_unique_news = deepcopy(unique_news)
+
+    # get old/new hydrogens
     old_hs = [atom.index for atom in old_ligand_topology.atoms() if atom.element == app.Element.getByAtomicNumber(1)]
     new_hs = [atom.index for atom in new_ligand_topology.atoms() if atom.element == app.Element.getByAtomicNumber(1)]
 
+    # make an internal function to query the hydrogen constraints
     def _make_constraint_dict(_system, hs_indices):
         _dict = {}
         for idx in range(_system.getNumConstraints()):
@@ -114,28 +121,33 @@ def repair_constraint_mapping(
             if a2 in hs_indices: _dict[a2] = _len
         return _dict
 
-    old_constraint_dict = _make_constraint_dict(old_ligand_system, old_ligand_topology)
-    new_constraint_dict = _make_constraint_dict(new_ligand_system, new_ligand_topology)
+    old_constraint_dict = _make_constraint_dict(old_ligand_system, old_hs)
+    new_constraint_dict = _make_constraint_dict(new_ligand_system, new_hs)
 
     to_del = []
     for new_idx, old_idx in new_to_old_map.items():
         if new_idx in new_constraint_dict.keys() and old_idx in old_constraint_dict.keys():
-            old_len, new_len = old_constraint_dict[old_idx], old_constraint_dict[new_constraint_dict]
-            if old_len != new_len:
+            old_len, new_len = old_constraint_dict[old_idx], new_constraint_dict[new_idx]
+            if not np.isclose(old_len.value_in_unit_system(unit.md_unit_system),
+                              new_len.value_in_unit_system(unit.md_unit_system)):
+                # if the constraint distances don't match, delete it
                 to_del.append(new_idx)
         elif old_idx in old_constraint_dict.keys() and new_idx not in new_constraint_dict.keys():
             to_del.append(new_idx)
         elif old_idx not in old_constraint_dict.keys() and new_idx in new_constraint_dict.keys():
             to_del.append(new_idx)
 
-    for idx in to_del:
+    for idx in to_del:  # indices are `new`
+        old_idx = new_to_old_atom_map[idx]  # query the old member
         del out_new_to_old_atom_map[idx]
+        out_unique_olds.append(old_idx)
+        out_unique_news.append(idx)
 
-    return out_new_to_old_atom_map
+    return out_new_to_old_atom_map, out_unique_olds, out_unique_news, to_del
 
 
 def get_full_atom_map_and_uniques(
-        ligand_new_to_old: Dict[int, int],
+        ligand_new_to_old_map: Dict[int, int],
         old_omm_topology: openmm.app.Topology,
         new_omm_topology: openmm.app.Topology,
         resname: str = 'MOL',
@@ -143,7 +155,7 @@ def get_full_atom_map_and_uniques(
 ):
     """given a ligand-only new-to-old atom map (zero-indexed),
     figure out how to expand the map to accommodate mapped `environment` atoms in
-    old/new omm_topologies; also return the offset new and old atoms for free."""
+    old/new omm_topologies; also return the offset value."""
     old_num_residues = old_omm_topology.getNumResidues()
     new_num_residues = new_omm_topology.getNumResidues()
     assert old_num_residues == new_num_residues, f"""
@@ -168,27 +180,31 @@ def get_full_atom_map_and_uniques(
                                          for key, val in ligand_new_to_old_map.items()}
             new_to_old_atom_map.update(offset_lig_new_to_old_map)
 
-    # cool, get the unique atoms; I'm assuming here that we have hit the `MOL` residue
+    # cool, get the unique atoms
     unique_news = [atom for atom in new_indices if atom not in offset_lig_new_to_old_map.keys()]
     unique_olds = [atom for atom in old_indices if atom not in offset_lig_new_to_old_map.values()]
 
-    return new_to_old_atom_map, unique_olds, unique_news
+    # get the offset value
+    ligand_offset_value = old_indices[0]
+
+    return new_to_old_atom_map, ligand_offset_value, unique_olds, unique_news
 
 
-def render_mol_map(mol_old,
-                   mol_new,
-                   new_to_old_atom_map,
-                   align_substructures: bool = True,
-                   MolsToGridImage_kwargs: Dict = {'subImgSize': (600, 600)},
-                   **unused_kwargs):
+def render_mol_map(
+        mol_old: Chem.Mol,
+        mol_new: Chem.Mol,
+        new_to_old_atom_map: Dict[int, int],
+        align_substructures: bool = True,
+        MolsToGridImage_kwargs: Dict = {'subImgSize': (600, 600)},
+        **unused_kwargs):
     """
-    make a mol mapping for two small molecules
+    make a mol mapping for two small molecules for visual mapping purposes in `jupyter.notebook`
     """
-
     from rdkit.Chem.Draw import IPythonConsole
     IPythonConsole.drawOptions.addAtomIndices = True
     from rdkit import Geometry
     from rdkit.Chem import AllChem, Draw
+
     match = np.transpose(np.array([[j, i] for i, j in new_to_old_atom_map.items()])).tolist()
     if align_substructures:  # if align substructures for 2d rendering
         AllChem.Compute2DCoords(mol_old)
@@ -198,9 +214,20 @@ def render_mol_map(mol_old,
         coord_dict = {match[1][i]: coord for i, coord in enumerate(coords2d)}
         AllChem.Compute2DCoords(mol_new, coordMap=coord_dict)
 
-    img = Draw.MolsToGridImage([mol_old, mol_new], molsPerRow=2, highlightAtomLists=match, **MolsToGridImage_kwargs)
+    img = Draw.MolsToGridImage([mol_old, mol_new],
+                               molsPerRow=2, highlightAtomLists=match, **MolsToGridImage_kwargs)
 
     return img
+
+
+def fix_barostat_in_place(system: openmm.System, barostat_name: str = 'MonteCarloBarostat', **unused_kwargs):
+    """remove a `MonteCarloBarostat` if the system is not periodic;
+    not sure why this is happening, exactly"""
+    for idx, force in enumerate(system.getForces()):
+        if force.__class__.__name__ == barostat_name:
+            system.removeForce(idx)
+            break
+    return system
 
 
 class RenderSolventOMMObjects(object):
@@ -223,10 +250,9 @@ class RenderSolventOMMObjects(object):
                      'nonperiodic_forcefield_kwargs': {'nonbondedMethod': app.NoCutoff}},
                  addSolvent_kwargs: Dict[str, Any] = {
                      'model': 'tip3p',
-                     'padding': 9. * unit.angstroms,
+                     'padding': 15. * unit.angstroms,
                      'ionicStrength': 0.15 * unit.molar},
                  ):
-        # TODO: revise this or make a subclass to handle protein appending...we are omitting this for now
         from openmmforcefields.generators import SystemGenerator
 
         # make openff.toolkit `molecules` from sdf files
@@ -240,32 +266,62 @@ class RenderSolventOMMObjects(object):
 
         # update the `addSolvent` kwargs to update the ff used from `SystemGenerator`
         addSolvent_kwargs.update({'forcefield': self._system_generator.forcefield})
+        self._addSolvent_kwargs = addSolvent_kwargs
 
         # reassign name of mol to target
         for _mol in [self._Molecule_old, self._Molecule_new]:
             _ = _mol.name = 'MOL'
 
-        # make `openmm.Topology` for vacuum phase
+        # make vacuum positions, systems, topologies (old/new); make vacuum by default
+        self._make_vacuum_pos_sys_top()
+
+    def _make_vacuum_pos_sys_top(self, **unused_kwargs):
+        """in-place generator for old/new vacuum positions, system, topology"""
+        # old/new top
         self._vacuum_omm_topology_old = self._Molecule_old.to_topology().to_openmm()
         self._vacuum_omm_topology_new = self._Molecule_new.to_topology().to_openmm()
 
-        # get vacuum positions.
+        # old/new pos; these go to angstrom for some reason
         self._vacuum_omm_positions_old = self._Molecule_old._conformers[0]
         self._vacuum_omm_positions_new = self._Molecule_new._conformers[0]
 
+        # make systems
+        self._vacuum_omm_system_old = fix_barostat_in_place(
+            self._system_generator.create_system(self._vacuum_omm_topology_old))
+        self._vacuum_omm_system_new = fix_barostat_in_place(
+            self._system_generator.create_system(self._vacuum_omm_topology_new))
+
+    def _make_solvent_pos_sys_top(self, **unused_kwargs):
         # make solvent old topology/positions
         self._solvent_omm_topology_old, self._solvent_omm_positions_old = omm_solvate_with_padding(
             omm_topology=self._vacuum_omm_topology_old,
             omm_positions=self._vacuum_omm_positions_old,
-            addSolvent_kwargs=addSolvent_kwargs)
+            addSolvent_kwargs=self._addSolvent_kwargs)
 
         # the solvent new topology, positions are rendered slightly differently; we use the mapping for this
         self._solvent_omm_topology_new = make_new_omm_top(old_omm_topology=self._solvent_omm_topology_old,
                                                           new_resname_omm_topology=self._vacuum_omm_topology_new)
+        self._solvent_omm_positions_new = self._make_solvent_omm_positions_new()
 
-        # generate systems
-        self._vacuum_omm_system_old = self._system_generator.create_system(self._vacuum_omm_topology_old)
-        self._vacuum_omm_system_new = self._system_generator.create_system(self._vacuum_omm_topology_new)
-
+        # make solvent system
         self._solvent_omm_system_old = self._system_generator.create_system(self._solvent_omm_topology_old)
         self._solvent_omm_system_new = self._system_generator.create_system(self._solvent_omm_topology_new)
+
+    def _make_solvent_omm_positions_new(self):
+        """make the new positions; this might be a bit sketch"""
+        num_new_atoms = self._solvent_omm_topology_new.getNumAtoms()
+        vac_posits_new = self._vacuum_omm_positions_new.value_in_unit(unit.nanometer)
+        solvent_posits_old = self._solvent_omm_positions_old.value_in_unit(unit.nanometer)
+        solvent_omm_positions_new = np.zeros((num_new_atoms, 3))
+
+        for old_res, new_res in zip(self._solvent_omm_topology_old.residues(),
+                                    self._solvent_omm_topology_new.residues()):
+            old_indices = [atom.index for atom in old_res.atoms()]
+            new_indices = [atom.index for atom in new_res.atoms()]
+            if old_res.name == 'MOL':
+                assert new_res.name == 'MOL'
+                solvent_omm_positions_new[new_indices, :] = vac_posits_new
+            else:
+                solvent_omm_positions_new[new_indices, :] = solvent_posits_old[old_indices, :]
+
+        return solvent_omm_positions_new * unit.nanometer
