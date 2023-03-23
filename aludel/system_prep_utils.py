@@ -6,7 +6,7 @@ import openmm
 import mdtraj as md
 import numpy as np
 
-from typing import Callable, Dict, Iterable, Tuple, Any
+from typing import Callable, Dict, Iterable, Tuple, Any, List
 from rdkit import Chem
 from openff.toolkit.topology import Molecule
 from openmm import unit, app

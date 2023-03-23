@@ -399,11 +399,12 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                 sorted_hybrid_indices = sorted([hybr_p1, hybr_p2])
                 ref_idx_list = excluded_particles_dict[sorted_hybrid_indices[0]]
                 if sorted_hybrid_indices[1] in ref_idx_list:  # this exclusion already exists
-                    pass
+                    continue
                 else:  # add the exclusion and update the dict
                     for nbf in nbf_list:
                         excl_idx = nbf.addExclusion(*sorted_hybrid_indices)
                     excluded_particles_dict[sorted_hybrid_indices[0]].append(sorted_hybrid_indices[1])
+        return excluded_particles_dict
 
     def _make_unique_exclusions(self, nbf_list, **unused_kwargs):
         """make exclusions between unique new/old particles in place"""
@@ -490,7 +491,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
 
         # add exclusions
         self._make_unique_exclusions([lam_indep_nbf, lam_dep_nbf])
-        self._make_consistent_exclusions([lam_indep_nbf, lam_dep_nbf])
+        self._consistent_exclusions = self._make_consistent_exclusions([lam_indep_nbf, lam_dep_nbf])
 
         # now make interaction groups
         # the lambda independent nbf only has `lambda_global`-independent environment-environment interactions

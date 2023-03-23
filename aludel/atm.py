@@ -112,6 +112,7 @@ class BaseSingleTopologyHybridSystemFactory(object):
             old_to_new_atom_map: Dict[int, int],
             unique_old_atoms: Iterable[int],
             unique_new_atoms: Iterable[int],
+            make_old_new_rf_systems: bool = True,
             **kwargs):
 
         self._old_system = copy.deepcopy(old_system)
@@ -138,6 +139,15 @@ class BaseSingleTopologyHybridSystemFactory(object):
             self._copy_barostat(**kwargs)  # copy barostat
 
         self._equip_hybrid_forces(**kwargs)
+
+        if make_old_new_rf_systems:
+            self._make_rf_systems(**kwargs)
+
+    def _make_rf_systems(self, **kwargs):
+        """simple utility to make rf systems"""
+        from aludel.rf import ReactionFieldConverter
+        self._old_rf_system = ReactionFieldConverter(self._old_system, **kwargs).rf_system
+        self._new_rf_system = ReactionFieldConverter(self._new_system, **kwargs).rf_system
 
     def _add_particles_to_hybrid(self, **unused_kwargs):
         """copy all old system particles to hybrid with identity mapping"""
@@ -274,14 +284,13 @@ class BaseSingleTopologyHybridSystemFactory(object):
         return duplicate_hybrid_system
 
 
-
 class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactory):
     """
     SoftCore ReactionField Single Topology HybridSystemFactory;
     WARNING: this operation can expect to take ~15s in complex phase.
     """
 
-    def __init__(self, *args, omission_sets: List[Set[int]]=[], **kwargs):
+    def __init__(self, *args, omission_sets: List[Set[int]] = [], **kwargs):
         self._omission_sets = omission_sets
         super().__init__(*args, **kwargs)
 
@@ -349,8 +358,8 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
 
     def test_energy_endstates(self, old_positions, new_positions, atol=1e-2,
                               rtol=1e-6, verbose=False, context_args=(),
-                              old_global_parameters: Dict[str, float]={'lambda_global': 0., 'retain_uniques': 0.},
-                              new_global_parameters: Dict[str, float]={'lambda_global': 1., 'retain_uniques': 0.},
+                              old_global_parameters: Dict[str, float] = {'lambda_global': 0., 'retain_uniques': 0.},
+                              new_global_parameters: Dict[str, float] = {'lambda_global': 1., 'retain_uniques': 0.},
                               **kwargs):
         """test the endstates energy bookkeeping here;
         WARNING: for complex phase, this is an expensive operation (~30s on CPU).
@@ -358,10 +367,12 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
         from aludel.atm import energy_by_force, get_hybrid_positions, get_original_positions_from_hybrid
         from aludel.rf import ReactionFieldConverter
 
-        if verbose: print(f"generating old rf system; may take time...")
-        old_rf_system = ReactionFieldConverter(self._old_system, **kwargs).rf_system
-        if verbose: print(f"generating new rf system; may take time...")
-        new_rf_system = ReactionFieldConverter(self._new_system, **kwargs).rf_system
+        try:
+            old_rf_system, new_rf_system = self._old_rf_system, self._new_rf_system
+        except Exception as e:
+            if verbose: print(f"generating old/new rf systems; may take time...")
+            self._make_rf_systems(**kwargs)
+            old_rf_system, new_rf_system = self._old_rf_system, self._new_rf_system
 
         hybrid_system = self.hybrid_system
         hybrid_positions = get_hybrid_positions(old_positions=old_positions,
