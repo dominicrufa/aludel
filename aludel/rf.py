@@ -6,6 +6,7 @@ import numpy as np
 import copy
 from typing import Any, Tuple, Dict, List, Callable, Set
 from aludel.utils import maybe_params_as_unitless
+from copy import deepcopy
 
 
 class ReactionFieldConverter(object):
@@ -279,29 +280,43 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     NB_STANDARD_REFF_TEMPLATE = ['reff_lj = r;', 'reff_q = r;']  # define the standard r-effectives
 
     NB_ALCH_REFF_TEMPLATE = [  # define the softcored r-effectives
-        'reff_lj = res_sigma*((softcore_alpha*(1-lam_sub)^softcore_b + (r/res_sigma)^softcore_c))^(1/softcore_c);',
-        'reff_q = res_sigma*((softcore_beta*(1-lam_sub)^softcore_e + (r/res_sigma)^softcore_f))^(1/softcore_f);']
+        'reff_lj = res_sigma*(({softcore_alpha}*(lam_sub)^{softcore_b} + (r/res_sigma)^{softcore_c}))^(1/{softcore_c});',
+        'reff_q = res_sigma*(({softcore_beta}*(lam_sub)^{softcore_e} + (r/res_sigma)^{softcore_f}))^(1/{softcore_f});']
     NB_ALCH_LIFTING_SELECTOR = [
-        'lam_sub = select(1-lift_somewhere, 1., lifting_selector);',  # dont lift at both
-        'lift_somewhere = step(lift_at_zero + lift_at_one - 0.1);',
-        'lifting_selector = select(1-lift_at_zero, 1-lambda_global, lambda_global);',
-        'lift_at_zero = select(abs(old_charge1*old_charge2)+sqrt(old_epsilon1*old_epsilon2), 0, 1);',
-        'lift_at_one = select(abs(new_charge1*new_charge2)+sqrt(new_epsilon1*new_epsilon2), 0, 1);']
+        'lam_sub = (unique_old * lambda_global) + (unique_new * (1. - lambda_global));',
+        'unique_old = step(unique_old1 + unique_old2 - 0.1);',
+        'unique_new = step(unique_new1 + unique_new2 - 0.1);']
     NB_ALCH_MIXING_PARAMETERS = [
         'res_charge_ = res_charge;',  # same as `res_charge`
-        'res_charge = old_charge1 * old_charge2 + lambda_global*(new_charge1*new_charge2 - old_charge1*old_charge2);',
-        'res_sigma = (old_sigma1 + old_sigma2)/2 + lambda_global*((new_sigma1 + new_sigma2)/2 - (old_sigma1 + old_sigma2)/2);',
-        'res_epsilon = sqrt(old_epsilon1*old_epsilon2) + lambda_global*(sqrt(new_epsilon1*new_epsilon2) - sqrt(old_epsilon1*old_epsilon2));']
+        'res_charge = old_charge + lambda_global * (new_charge - old_charge);',
+        'res_sigma = old_sigma + lambda_global * (new_sigma - old_sigma);',
+        'res_epsilon = old_epsilon + lambda_global * (new_epsilon - old_epsilon);'
+    ]
+
+    NB_ALCH_OLD_NEW_MIXING_PARAMETERS = [
+        'old_charge = old_charge1 * old_charge2;',
+        'new_charge = new_charge1 * new_charge2;',
+        'old_sigma = (old_sigma1 + old_sigma2)/2;',
+        'new_sigma = (new_sigma1 + new_sigma2)/2;',
+        'old_epsilon = sqrt(old_epsilon1 * old_epsilon2);',
+        'new_epsilon = sqrt(new_epsilon1 * new_epsilon2);'
+    ]
     NB_ALCH_PER_PARTICLE_PARAMETERS = [
         'old_charge', 'new_charge',
         'old_sigma', 'new_sigma',
-        'old_epsilon', 'new_epsilon']
+        'old_epsilon', 'new_epsilon',
+        'unique_old', 'unique_new']
+
+    NB_EXC_ALCH_MIXING_PARAMETERS = deepcopy(NB_ALCH_MIXING_PARAMETERS)
+    NB_EXC_ALCH_MIXING_PARAMETERS[0] = 'res_charge_ = old_charge_ + lambda_global * (new_charge_ - old_charge_);'
+    NB_EXC_STANDARD_PER_BOND_PARAMETERS = deepcopy(NB_PER_PARTICLE_PARAMETERS) + ['res_charge_']
 
     NB_SELF_TEMPLATE = "0.5*{ONE_4PI_EPS0} * chargeprod_ * (-{crf});"  # define the nonbonded self term template
     NB_GLOBAL_PARAMETERS = {  # define the global parameters
         # turn values of 1. into 1+1e-3 because of omm bug:
         # https://github.com/openmm/openmm/issues/3833
-        'lambda_global': 0.,
+        'lambda_global': 0.}
+    NB_SOFTCORE_GLOBAL_PARAMETERS = {
         'softcore_alpha': 0.5,
         'softcore_beta': 0.5,
         'softcore_b': 1.001,
@@ -310,23 +325,6 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         'softcore_e': 1.001,
         'softcore_f': 2.
     }
-
-    # Alchemical NB Exceptions
-    NB_EXC_PARAMETERS = ['res_charge', 'res_charge_', 'res_sigma', 'res_epsilon']
-    NB_EXC_ALCH_LIFTING_SELECTOR = copy.deepcopy(NB_ALCH_LIFTING_SELECTOR)
-    NB_EXC_ALCH_LIFTING_SELECTOR[-2:] = [
-        'lift_at_zero = select(abs(old_res_charge)+abs(old_res_epsilon), 0, 1);',
-        'lift_at_one = select(abs(new_res_charge)+abs(new_res_epsilon), 0, 1);'
-    ]
-    NB_EXC_ALCH_MIXING_PARAMETERS = [
-        'res_charge_ = old_res_charge_ + lambda_global*(new_res_charge_ - old_res_charge_);',  # same as `res_charge`
-        'res_charge = old_res_charge + lambda_global*(new_res_charge - old_res_charge);',
-        'res_sigma = old_res_sigma + lambda_global*(new_res_sigma - old_res_sigma);',
-        'res_epsilon = old_res_epsilon + lambda_global*(new_res_epsilon - old_res_epsilon);']
-    NB_EXC_ALCH_PARAMETERS = ['old_res_charge', 'new_res_charge',
-                              'old_res_charge_', 'new_res_charge_',
-                              'old_res_sigma', 'new_res_sigma',
-                              'old_res_epsilon', 'new_res_epsilon']
 
     def __init__(self: Any,
                  old_nbf: openmm.NonbondedForce,
@@ -342,6 +340,11 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                  ONE_4PI_EPS0: float = 138.93545764438198,
                  allow_false_unique_exceptions: bool = True,
                  **kwargs):
+
+        self._consistent_mapped_params = None
+        self._inconsistent_mapped_indices = None
+        self._unique_exception_indices = None
+        self._alch_interaction_group = None
 
         self._old_nbf = old_nbf
         self._new_nbf = new_nbf
@@ -361,6 +364,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         self._hybrid_to_new_map = {val: key for key, val in self._new_to_hybrid_map.items()}
 
         self._custom_nbfs = self.handle_nonbonded_pairs(**kwargs)
+        self.create_exception_dicts(**kwargs)
         self._custom_bfs = self.make_exceptions(**kwargs)
         self._self_bf = self.make_self_force(**kwargs)
 
@@ -377,34 +381,78 @@ class SingleTopologyHybridNBFReactionFieldConverter():
 
         return out_dict
 
-    def make_blank_nbf(self, **kwargs):
-        nbf = openmm.CustomNonbondedForce('')
-        nb_method = openmm.CustomNonbondedForce.CutoffPeriodic if \
-            self._is_periodic else openmm.CustomNonbondedForce.NoCutoff
-        nbf.setNonbondedMethod(nb_method)
-        nbf.setCutoffDistance(self._cutoff)
-        nbf.setUseLongRangeCorrection(False)  # do I want to hardcode this?
-        return nbf
+    def create_exception_dicts(self, **kwargs):
+        """log a collection of attribute dictionaries;
+        1. `unique_exception_indices`: dictionary of unique exception indices in old/new nbfs
+        2. `inconsistent_mapped_indices`: dictionary of inconsistent unique exceptions in old/new nbfs
+        3. `consistent_mapped_params`: dictionary of consistent mapped parameters that appear in both systems;
+            these are either alchemical, nonalchemical, or constrained; there is further logic downfield"""
+        self._unique_exception_indices = {self._old_nbf: [], self._new_nbf: []}
+        self._inconsistent_mapped_indices = {self._old_nbf: [], self._new_nbf: []}
+        self._consistent_mapped_params = {}
+
+        for orig_nbf in [self._old_nbf, self._new_nbf]:  # iterate over old/new nbfs
+            num_exceptions = orig_nbf.getNumExceptions()
+            opp_orig_force = self._new_nbf if orig_nbf == self._old_nbf else self._old_nbf
+            querier_map = self._old_to_hybrid_map if orig_nbf == self._old_nbf \
+                else self._new_to_hybrid_map
+            to_opp_map = self._hybrid_to_new_map if orig_nbf == self._old_nbf else self._hybrid_to_old_map
+            uniques = self._unique_old_atoms if orig_nbf == self._old_nbf else self._unique_new_atoms
+            for _idx in range(num_exceptions):  # iterate over all exceptions
+                orig_p1, orig_p2, cp, s, e = orig_nbf.getExceptionParameters(_idx)
+                exception_params = maybe_params_as_unitless([cp, s, e])
+                sorted_orig_indices = sorted([orig_p1, orig_p2])
+                sorted_hybrid_indices = sorted([querier_map[orig_p1], querier_map[orig_p2]])
+                query_orig_idx = sorted_orig_indices[0]
+                if len(set(sorted_orig_indices).intersection(set(uniques))) > 0:  # then it is unique
+                    self._unique_exception_indices[orig_nbf].append(_idx)
+                else:  # both of these particles are mapped
+                    sorted_opp_indices = sorted([to_opp_map[sorted_hybrid_indices[0]],
+                                                 to_opp_map[sorted_hybrid_indices[1]]])
+                    # ask if the term is in the opposite force
+                    match_idx_list = self._excluded_particles_dict[opp_orig_force][sorted_opp_indices[0]]
+                    if sorted_opp_indices[1] in match_idx_list:  # this exception lives in the opp force
+                        if orig_nbf == self._new_nbf: continue  # this term is already mapped since we do old then new
+                        opp_exception_params = self._exception_parameters[opp_orig_force][tuple(sorted_opp_indices)]
+                        self._consistent_mapped_params[tuple(sorted_hybrid_indices)] = [exception_params, opp_exception_params]
+                    else:  # this exception does not live in the opp force
+                        self._inconsistent_mapped_indices[orig_nbf].append(_idx)
 
     def _make_consistent_exclusions(self, nbf_list, **unused_kwargs):
-        """add consistent exclusions from old/new nbfs in place"""
-        excluded_particles_dict = {i: [] for i in range(self._num_hybrid_particles)}
+        """add consistent exclusions from old/new nbfs in place and create attributes for queryable exception
+        parameters and exclusions """
+        self._excluded_particles_dict = {
+            self._old_nbf: {i: [] for i in range(self._old_nbf.getNumParticles())},
+            self._new_nbf: {i: [] for i in range(self._new_nbf.getNumParticles())}
+        }
+
+        self._exception_parameters = {
+            self._old_nbf: {},
+            self._new_nbf: {}
+        }
+
+        internal_hybrid_exceptions = {i: [] for i in range(self._num_hybrid_particles)}
+
         for orig_nbf in [self._old_nbf, self._new_nbf]:
             num_exceptions = orig_nbf.getNumExceptions()
             querier_map = self._old_to_hybrid_map if orig_nbf == self._old_nbf \
                 else self._new_to_hybrid_map
             for _idx in range(num_exceptions):
                 orig_p1, orig_p2, cp, s, e = orig_nbf.getExceptionParameters(_idx)
+                cp, s, e = maybe_params_as_unitless([cp, s, e])  # make terms unitless
+                sorted_orig_indices = sorted([orig_p1, orig_p2])
+                self._exception_parameters[orig_nbf][tuple(sorted_orig_indices)] = [cp, s, e]  # record the exception
                 hybr_p1, hybr_p2 = querier_map[orig_p1], querier_map[orig_p2]
                 sorted_hybrid_indices = sorted([hybr_p1, hybr_p2])
-                ref_idx_list = excluded_particles_dict[sorted_hybrid_indices[0]]
+                ref_idx_list = internal_hybrid_exceptions[sorted_hybrid_indices[0]]
+                # regardless, append to excluded particles dict
+                self._excluded_particles_dict[orig_nbf][sorted_orig_indices[0]].append(sorted_orig_indices[1])
                 if sorted_hybrid_indices[1] in ref_idx_list:  # this exclusion already exists
                     continue
                 else:  # add the exclusion and update the dict
+                    internal_hybrid_exceptions[sorted_hybrid_indices[0]].append(sorted_hybrid_indices[1])
                     for nbf in nbf_list:
-                        excl_idx = nbf.addExclusion(*sorted_hybrid_indices)
-                    excluded_particles_dict[sorted_hybrid_indices[0]].append(sorted_hybrid_indices[1])
-        return excluded_particles_dict
+                        excl_idx = nbf.addExclusion(hybr_p1, hybr_p2)
 
     def _make_unique_exclusions(self, nbf_list, **unused_kwargs):
         """make exclusions between unique new/old particles in place"""
@@ -415,257 +463,294 @@ class SingleTopologyHybridNBFReactionFieldConverter():
                 for nbf in nbf_list:
                     excl_idx = nbf.addExclusion(unique_new_hybr_idx, unique_old_hybr_idx)
 
+    def handle_nbf_nb_method(self, nbf, **unused_kwargs):
+        nb_method = openmm.CustomNonbondedForce.CutoffPeriodic if \
+            self._is_periodic else openmm.CustomNonbondedForce.NoCutoff
+        nbf.setNonbondedMethod(nb_method)
+        nbf.setCutoffDistance(self._cutoff)
+        nbf.setUseLongRangeCorrection(False)  # do I want to hardcode this?
+
+    def _make_alch_nbf(self, **kwargs):
+        nbf = openmm.CustomNonbondedForce('')
+        self.handle_nbf_nb_method(nbf)
+
+        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
+        rf_terms.update(self.NB_SOFTCORE_GLOBAL_PARAMETERS)
+        energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
+                               + self.NB_ALCH_REFF_TEMPLATE + self.NB_ALCH_LIFTING_SELECTOR + self.NB_ALCH_MIXING_PARAMETERS + self.NB_ALCH_OLD_NEW_MIXING_PARAMETERS).format(
+            **rf_terms)
+
+        nbf.setEnergyFunction(energy_expr)
+        for particle_param in self.NB_ALCH_PER_PARTICLE_PARAMETERS:  # per particle params
+            _ = nbf.addPerParticleParameter(particle_param)
+        for global_param, global_param_val in self.NB_GLOBAL_PARAMETERS.items():  # global params
+            _ = nbf.addGlobalParameter(global_param, global_param_val)
+
+        return nbf
+
+    def _make_nonalch_nbf(self, **kwargs):
+        nbf = openmm.CustomNonbondedForce('')
+        self.handle_nbf_nb_method(nbf)
+
+        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
+        rf_terms.update(self.NB_SOFTCORE_GLOBAL_PARAMETERS)
+        energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
+                               + self.NB_STANDARD_REFF_TEMPLATE + self.NB_MIXING_PARAMETERS).format(**rf_terms)
+
+        nbf.setEnergyFunction(energy_expr)
+        for particle_param in self.NB_PER_PARTICLE_PARAMETERS:  # per particle params
+            _ = nbf.addPerParticleParameter(particle_param)
+
+        return nbf
+
     def handle_nonbonded_pairs(self, **kwargs):
         """generate a dict of `openmm.CustomNonbondedForce` objects.
         1. independent of all global parameters; nonbonded interactions
             that do not involve parameter changes
         2. dependent on global parameters; includes nonbonded that involve parameter changes
         """
-        lam_dep_nbf = self.make_blank_nbf()  # lambda-dependent nbf
-        lam_indep_nbf = self.make_blank_nbf()  # lambda-independent nbf
+        nonalch_nbf = self._make_nonalch_nbf(**kwargs)
+        alch_nbf = self._make_alch_nbf()
 
-        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
-
-        # lambda-independent nbf setup
-        lam_indep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
-                                         + self.NB_STANDARD_REFF_TEMPLATE + self.NB_MIXING_PARAMETERS).format(
-            **rf_terms)
-        lam_indep_nbf.setEnergyFunction(lam_indep_energy_expr)
-        for particle_param in self.NB_PER_PARTICLE_PARAMETERS:  # per particle params
-            lam_indep_nbf.addPerParticleParameter(particle_param)
-
-        # lambda-dependent nbf setup
-        lam_dep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
-                                       + self.NB_ALCH_REFF_TEMPLATE + self.NB_ALCH_LIFTING_SELECTOR + self.NB_ALCH_MIXING_PARAMETERS).format(
-            **rf_terms)
-        lam_dep_nbf.setEnergyFunction(lam_dep_energy_expr)
-        for particle_param in self.NB_ALCH_PER_PARTICLE_PARAMETERS:  # per particle params
-            _ = lam_dep_nbf.addPerParticleParameter(particle_param)
-        for global_param, global_param_val in self.NB_GLOBAL_PARAMETERS.items():  # global params
-            _ = lam_dep_nbf.addGlobalParameter(global_param, global_param_val)
-
-        hybrid_to_old_map = self._hybrid_to_old_map  # for references
+        # for references
+        hybrid_to_old_map = self._hybrid_to_old_map
         hybrid_to_new_map = self._hybrid_to_new_map
 
-        env_interaction_group = []  # tally the 'environment' interactions
-        nonenv_interaction_group = []  # tally the non-environment interactions
+        alch_interaction_group = []
+        nonalch_interaction_group = []
 
         # iterate over all hybrid particles
         for hybrid_idx in range(self._num_hybrid_particles):
-            try:  # get old idx
-                old_idx = hybrid_to_old_map[hybrid_idx]
-            except Exception as e:  # it is unique new
-                old_idx = -1
-            try:  # get new idx
-                new_idx = hybrid_to_new_map[hybrid_idx]
-            except Exception as e:  # it is unique old
-                new_idx = -1
+            old_idx = hybrid_to_old_map.get(hybrid_idx, -1)
+            new_idx = hybrid_to_new_map.get(hybrid_idx, -1)
 
-            if new_idx < 0:  # then it is unique old
+            if new_idx == -1:  # then it is unique old
                 oc, os, oe = maybe_params_as_unitless(
                     self._old_nbf.getParticleParameters(old_idx))
                 nc, ns, ne = oc * 0., os, oe * 0.  # new charge, eps are zero
-            elif old_idx < 0:  # then it is unique new
+                uniques = [1, 0]
+            elif old_idx == -1:  # then it is unique new
                 nc, ns, ne = maybe_params_as_unitless(
                     self._new_nbf.getParticleParameters(new_idx))
                 oc, os, oe = nc * 0., ns, ne * 0.  # old charge, eps are zero
+                uniques = [0, 1]
             else:  # it is mapped; there is more complicated lifting logic
                 oc, os, oe = maybe_params_as_unitless(self._old_nbf.getParticleParameters(old_idx))
                 nc, ns, ne = maybe_params_as_unitless(self._new_nbf.getParticleParameters(new_idx))
+                # assert (oe > 0.) and np.abs(ne > 0), f"""if the particle is mapped,
+                #     its old/new epsilons must be nonzero"""
+                uniques = [0, 0]
 
             # pull the particle parameters together
-            dep_params = [oc, nc, os, ns, oe, ne]
+            dep_params = [oc, nc, os, ns, oe, ne] + uniques
 
             # now add particle.
-            pass_indep_hybr_idx = lam_indep_nbf.addParticle([oc, os, oe])
-            pass_dep_hybr_idx = lam_dep_nbf.addParticle(dep_params)  # zero out all vals here
+            pass_indep_hybr_idx = nonalch_nbf.addParticle([oc, os, oe])
+            pass_dep_hybr_idx = alch_nbf.addParticle(dep_params)
 
             # the indices must match those of hybrid index
             assert pass_indep_hybr_idx == hybrid_idx
             assert pass_dep_hybr_idx == hybrid_idx
 
-            if are_nb_params_identical(oc, nc, os, ns, oe, ne):  # these are environment
-                env_interaction_group.append(hybrid_idx)
-            else:
-                nonenv_interaction_group.append(hybrid_idx)
+            # interaction group logic
+            if np.isclose(np.sum(dep_params[-2:]), 0):  # it is not unique
+                if are_nb_params_identical(*dep_params[:-2]):  # if params are identical, no need to make alchemical
+                    nonalch_interaction_group.append(hybrid_idx)
+                else:  # if they are not identical, need to interpolate
+                    alch_interaction_group.append(hybrid_idx)
+            else:  # unique particles always go to alch interaction group
+                alch_interaction_group.append(hybrid_idx)
 
         # add exclusions
-        self._make_unique_exclusions([lam_indep_nbf, lam_dep_nbf])
-        self._consistent_exclusions = self._make_consistent_exclusions([lam_indep_nbf, lam_dep_nbf])
+        self._make_unique_exclusions([alch_nbf, nonalch_nbf])
+        self._make_consistent_exclusions([alch_nbf, nonalch_nbf])
 
-        # now make interaction groups
-        # the lambda independent nbf only has `lambda_global`-independent environment-environment interactions
-        # print(f"environment interaction group: {env_interaction_group}")
-        lam_indep_nbf.addInteractionGroup(env_interaction_group, env_interaction_group)
+        nonalch_nbf.addInteractionGroup(nonalch_interaction_group, nonalch_interaction_group)
+        alch_nbf.addInteractionGroup(alch_interaction_group, nonalch_interaction_group)
+        alch_nbf.addInteractionGroup(alch_interaction_group, alch_interaction_group)
 
-        # the lambda dependent nbf has `lambda_global`-dependent interactions between env-nonenv and nonenv-nonenv
-        # that completes the holy alchemical triumvirate
-        lam_dep_nbf.addInteractionGroup(nonenv_interaction_group, env_interaction_group)
-        lam_dep_nbf.addInteractionGroup(nonenv_interaction_group, nonenv_interaction_group)
+        # define interaction groups
+        self._alch_interaction_group = alch_interaction_group
+        self._nonalch_interaction_group = nonalch_interaction_group
 
-        return {'static': lam_indep_nbf, 'dynamic': lam_dep_nbf}
+        return {'static': nonalch_nbf, 'dynamic': alch_nbf}
 
-    def make_exceptions(self, **unused_kwargs):
-        """make a dict of unique and mapped exception `openmm.CustomBondForce` objects to
-        accommodate nonbonded exclusions in the `openmm.CustomNonbondedForce` objects.
-
-        There are 3 custom bond Forces here.
-        1. `static` is independent of lambda global, does not contain any unique particles, nor includes softcores;
-            this is specific to interactions that are retained in both systems and are not distance-constrained.
-        2. `dynamic_unique` is dependent on lambda global and exclusively contains unique interactions;
-            it is technically dependent on lambda_global because it is used in energy validation checks, but
-            it is softcored.
-        3. `dynamic_mapped` is dependent on lambda global and contains all mapped exceptions in new/old systems;
-            it is only softcored if the interaction goes to zero at one endstate.
-        4. `static_constraint` is independent of lambda global with the same functional form as `static`;
-            this is specific to interactions that are retained in both systems and are distance-constrained
-        """
-        hybrid_to_old_map = self._hybrid_to_old_map
-        hybrid_to_new_map = self._hybrid_to_new_map
-
-        rf_terms = self._get_rf_terms(**unused_kwargs)  # get the RF terms
-
-        # make the forces; no need to render periodic
-        lam_indep_cbf = openmm.CustomBondForce('')
-        lam_dep_cbf = openmm.CustomBondForce('')
-        lam_unique_cbf = openmm.CustomBondForce('')
-        constraint_cbf = openmm.CustomBondForce('')
-
-        # lam_indep_cbf first
-        lam_indep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE + self.NB_STANDARD_REFF_TEMPLATE).format(**rf_terms)
-        lam_indep_cbf.setEnergyFunction(lam_indep_energy_expr)
-        for param in self.NB_EXC_PARAMETERS:  # per bond parameters
-            lam_indep_cbf.addPerBondParameter(param)
-
-        # lam_dep_cbf
-        lam_dep_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE
-                                       + self.NB_ALCH_REFF_TEMPLATE + self.NB_EXC_ALCH_LIFTING_SELECTOR + self.NB_EXC_ALCH_MIXING_PARAMETERS).format(
+    def _make_alch_cbf(self, **kwargs):
+        """make an alchemical `openmm.CustomBondForce`;
+        bond parameters are added like [oc, nc, os, ns, oe, ne, unique_old, unique_new, oc_, nc_]"""
+        cbf = openmm.CustomBondForce('')
+        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
+        rf_terms.update(self.NB_SOFTCORE_GLOBAL_PARAMETERS)
+        energy_expr = ' '.join(self.NB_PAIR_TEMPLATE + self.NB_ALCH_REFF_TEMPLATE + self.NB_ALCH_LIFTING_SELECTOR[
+                                                                                    :1] + self.NB_EXC_ALCH_MIXING_PARAMETERS).format(
             **rf_terms)
-        lam_dep_cbf.setEnergyFunction(lam_dep_energy_expr)
-        for param in self.NB_EXC_ALCH_PARAMETERS:
-            _ = lam_dep_cbf.addPerBondParameter(param)
+        cbf.setEnergyFunction(energy_expr)
+        per_bond_params = deepcopy(self.NB_ALCH_PER_PARTICLE_PARAMETERS) + ['old_charge_', 'new_charge_']
+        for per_bond_param in per_bond_params:
+            cbf.addPerBondParameter(per_bond_param)
         for global_param, global_param_val in self.NB_GLOBAL_PARAMETERS.items():  # global params
-            _ = lam_dep_cbf.addGlobalParameter(global_param, global_param_val)
+            _ = cbf.addGlobalParameter(global_param, global_param_val)
+        return cbf
 
-        # lam_dep_unique_cbf; identical to `lam_dep_cbf`; only separating it for bookkeeping reasons
-        lam_dep_unique_cbf = copy.deepcopy(lam_dep_cbf)
+    def _make_standard_cbf(self, **kwargs):
+        """make a nonalchemical `openmm.CustomBondForce`;
+        bond parameters are added like [c, s, e, c_]"""
+        cbf = openmm.CustomBondForce('')
+        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
+        energy_expr = ' '.join(self.NB_PAIR_TEMPLATE + self.NB_STANDARD_REFF_TEMPLATE).format(**rf_terms)
+        cbf.setEnergyFunction(energy_expr)
+        for per_bond_param in self.NB_EXC_STANDARD_PER_BOND_PARAMETERS:
+            cbf.addPerBondParameter(per_bond_param)
+        return cbf
 
-        # constraint cbf
-        constraint_energy_expr = ' '.join(self.NB_PAIR_TEMPLATE).format(**rf_terms)
-        constraint_energy_expr = constraint_energy_expr.replace('r^', 'reff_q^') # make the expression independent of r
-        constraint_cbf.setEnergyFunction(constraint_energy_expr)
-
-        per_bond_params = self.NB_EXC_PARAMETERS + ['reff_lj', 'reff_q']
+    def _make_standard_constraint_cbf(self, **kwargs):
+        """make a nonalchemical, constrained `openmm.CustomBondForce`;
+        bond parameters are added like [c, s, e, c_, reff_q]; the last two params are generally the same"""
+        cbf = openmm.CustomBondForce('')
+        rf_terms = self._get_rf_terms(**kwargs)  # get the RF terms
+        energy_expr = ' '.join(self.NB_PAIR_TEMPLATE).format(**rf_terms)
+        energy_expr = energy_expr.replace('r^', 'reff_q^').replace('reff_lj', 'reff_q')  # make the expression independent of r
+        cbf.setEnergyFunction(energy_expr)
+        per_bond_params = self.NB_EXC_STANDARD_PER_BOND_PARAMETERS + ['reff_q']
         for param in per_bond_params:
-            _ = constraint_cbf.addPerBondParameter(param)
+            _ = cbf.addPerBondParameter(param)
+        return cbf
 
-        # first, get the exception data to query later.
-        exception_data = make_exception_dict(old_nbf=self._old_nbf,
-                                             new_nbf=self._new_nbf, old_to_hybrid_map=self._old_to_hybrid_map,
-                                             new_to_hybrid_map=self._new_to_hybrid_map, **unused_kwargs)
+    def _make_inconsistent_exception_force(self, **kwargs):
+        """make a force that handles inconsistent exceptions; specifically, this force turns interactions that
+        exist as typical pairwise interactions in the new force but not in the old force and vice versa"""
+        cbf = self._make_alch_cbf(**kwargs)
+        for orig_nbf, inconsistent_indices in self._inconsistent_mapped_indices.items():
+            to_hybrid_map = self._old_to_hybrid_map if orig_nbf == self._old_nbf else self._new_to_hybrid_map
+            for inconsistent_idx in inconsistent_indices:
+                p1, p2, _, _, _ = orig_nbf.getExceptionParameters(inconsistent_idx)
+                hybrid_p1, hybrid_p2 = to_hybrid_map[p1], to_hybrid_map[p2]
+                [old_p1, old_p2] = [self._hybrid_to_old_map[to_hybrid_map[p1]], self._hybrid_to_old_map[to_hybrid_map[p2]]]
+                [new_p1, new_p2] = [self._hybrid_to_new_map[to_hybrid_map[p1]], self._hybrid_to_new_map[to_hybrid_map[p2]]]
+                oc1, os1, oe1 = maybe_params_as_unitless(self._old_nbf.getParticleParameters(old_p1))
+                oc2, os2, oe2 = maybe_params_as_unitless(self._old_nbf.getParticleParameters(old_p2))
+                nc1, ns1, ne1 = maybe_params_as_unitless(self._new_nbf.getParticleParameters(new_p1))
+                nc2, ns2, ne2 = maybe_params_as_unitless(self._new_nbf.getParticleParameters(new_p2))
+                if orig_nbf == self._old_nbf:  # we take the new parameters
+                    params = [0., nc1 * nc2,
+                            0.5 * (ns1 + nc2) / 2, 0.5 * (ns1 + nc2) / 2,
+                            0., np.sqrt(ne1 * ne2),
+                            0, 1,
+                            0., nc1 * nc2]
+                else:
+                    params = [oc1 * oc2, 0.,
+                            0.5 * (os1 + os2), 0.5 * (os1 + os2),
+                            np.sqrt(oe1 * oe2), 0.,
+                            1, 0,
+                            oc1 * oc2, 0.]
+                cbf.addBond(hybrid_p1, hybrid_p2, params)
+        return {'dynamic_inconsistent': cbf}
 
-        for _force in [self._old_nbf, self._new_nbf]:
-            num_exceptions = _force.getNumExceptions()  # query num exceptions
-            opp_force = self._old_nbf if _force == self._new_nbf else self._new_nbf
-            to_hybrid_map = self._old_to_hybrid_map if _force == self._old_nbf \
-                else self._new_to_hybrid_map
-            to_opposite_orig_map = hybrid_to_new_map if _force == self._old_nbf \
-                else hybrid_to_old_map
-            opp_exc_dict_to_query = exception_data[self._new_nbf] if \
-                _force == self._old_nbf else exception_data[self._old_nbf]
-            uniques = self._unique_old_atoms if _force == self._old_nbf \
-                else self._unique_new_atoms
+    def _make_unique_exception_force(self, **kwargs):
+        """make an exception force that handles the unique old/new particle exceptions (they are to be turned off/on);
+        this is with specific reference to `self._unique_exception_indices`"""
+        cbf = self._make_alch_cbf(**kwargs)
+        for orig_nbf, unique_exception_indices in self._unique_exception_indices.items():
+            to_hybrid_map = self._old_to_hybrid_map if orig_nbf == self._old_nbf else self._new_to_hybrid_map
+            for unique_idx in unique_exception_indices:
+                p1, p2, c, s, e = orig_nbf.getExceptionParameters(unique_idx)
+                hybrid_p1, hybrid_p2 = to_hybrid_map[p1], to_hybrid_map[p2]
+                c, s, e = self._exception_parameters[orig_nbf][tuple(sorted([p1, p2]))]
+                c1, _, _ = maybe_params_as_unitless(orig_nbf.getParticleParameters(p1))
+                c2, _, _ = maybe_params_as_unitless(orig_nbf.getParticleParameters(p2))
+                if orig_nbf == self._old_nbf:
+                    _ = cbf.addBond(hybrid_p1, hybrid_p2,
+                                    [c, 0,
+                                     s, s,
+                                     e, 0,
+                                     1, 0,
+                                     c1*c2, 0])
+                else:
+                    _ = cbf.addBond(hybrid_p1, hybrid_p2,
+                                    [0, c,
+                                     s, s,
+                                     0, e,
+                                     0, 1,
+                                     0, c1*c2])
+        return {'dynamic_unique': cbf}
 
-            for orig_exc_idx in range(num_exceptions):  # query original exceptions
-                orig_exc_params = _force.getExceptionParameters(orig_exc_idx)
-                orig_indices = orig_exc_params[:2]
-                orig_nonidx_params = maybe_params_as_unitless(orig_exc_params[2:])
+    def _make_mapped_exception_forces(self, **kwargs):
+        """make some exception forces that handle the mapped exceptions between the old/new forces.
+        For this, I'll query `self._consistent_mapped_params`
+        There is a couple of special handlers:
+        1. if the old/new term does not change:
+            if there is a constraint: place it into a lambda_global-independent, r-independent self-force.
+            else (there is not a constraint): place it into a lambda_global-independent force
+        2. if the old/new term does change: place into a lambda_global-dependent force;
+            here, if one of the terms goes to zero at an endstate, lift it at that endstate
+        """
+        std_cbf = self._make_standard_cbf(**kwargs)
+        alch_cbf = self._make_alch_cbf(**kwargs)
+        const_cbf = self._make_standard_constraint_cbf(**kwargs)
 
-                hybrid_inds = [to_hybrid_map[_q] for _q in orig_indices]
-                sorted_hybrid_inds_str = sort_indices_to_str(hybrid_inds)
+        for hybrid_idx_tuple, (old_exc_params, new_exc_params) in self._consistent_mapped_params.items():
+            hp1, hp2 = hybrid_idx_tuple
+            op1, op2 = self._hybrid_to_old_map[hp1], self._hybrid_to_old_map[hp2]
+            np1, np2 = self._hybrid_to_new_map[hp1], self._hybrid_to_new_map[hp2]
+            oc1, _, _ = maybe_params_as_unitless(self._old_nbf.getParticleParameters(op1))
+            oc2, _, _ = maybe_params_as_unitless(self._old_nbf.getParticleParameters(op2))
+            nc1, _, _ = maybe_params_as_unitless(self._new_nbf.getParticleParameters(np1))
+            nc2, _, _ = maybe_params_as_unitless(self._new_nbf.getParticleParameters(np2))
+            oc_, nc_ = oc1 * oc2, nc1 * nc2
+            oc, nc = old_exc_params[0], new_exc_params[0]
+            os, ns = old_exc_params[1], new_exc_params[1]
+            oe, ne = old_exc_params[2], new_exc_params[2]
+            identical = are_nb_params_identical(oc, nc, os, ns, oe, ne, oc_, nc_)
+            if identical: # this can go into standard force
+                constraint_len = self._constraints_dict.get(hybrid_idx_tuple, -1)
+                if constraint_len < 0: # there is no constraint match; place in standard cbf
+                    _ = std_cbf.addBond(*hybrid_idx_tuple, [oc, os, oe, oc_])
+                else: # there is a constraint; place in constraint force
+                    _ = const_cbf.addBond(*hybrid_idx_tuple, [oc, os, oe, oc_, constraint_len])
+            else: # these terms are not identical; interpolate between them; lift appropriately
+                params = [oc, nc, os, ns, oe, ne, 0, 0, oc_, nc_]
+                old_term_zero = np.isclose(oc, 0) and np.isclose(oe, 0) # the old term is zeroed out
+                new_term_zero = np.isclose(nc, 0) and np.isclose(ne, 0) # the new term is zeroed out
+                if old_term_zero and not new_term_zero: # treat this as unique new
+                    params[7] = 1
+                elif not old_term_zero and new_term_zero: # treat as unique old
+                    params[6] = 1
+                else: # either old/new term is zero or neither is zero but params change; there are no singularities
+                    pass
+                _ = alch_cbf.addBond(*hybrid_idx_tuple, params)
 
-                c1, _, _ = maybe_params_as_unitless(
-                    _force.getParticleParameters(orig_indices[0]))
-                c2, _, _ = maybe_params_as_unitless(
-                    _force.getParticleParameters(orig_indices[1]))
+        # now the tricky part is to iterate over the inconsistent parameters and add the _c parameters for consistency
+        for orig_nbf, inconsistent_indices in self._inconsistent_mapped_indices.items():
+            to_hybrid_map = self._old_to_hybrid_map if orig_nbf == self._old_nbf else self._new_to_hybrid_map
+            for inconsistent_idx in inconsistent_indices:
+                p1, p2, _, _, _ = orig_nbf.getExceptionParameters(inconsistent_idx)
+                c1, _, _ = maybe_params_as_unitless(orig_nbf.getParticleParameters(p1))
+                c2, _, _ = maybe_params_as_unitless(orig_nbf.getParticleParameters(p2))
+                c_ = c1*c2
+                hybrid_p1, hybrid_p2 = to_hybrid_map[p1], to_hybrid_map[p2]
+                exc_params = self._exception_parameters[orig_nbf][tuple(sorted([p1, p2]))]
+                if orig_nbf == self._old_nbf: # the term is unique old
+                    params = [exc_params[0], 0.,
+                              exc_params[1], exc_params[1],
+                              exc_params[2], 0.,
+                              1, 0,
+                              c_, 0.]
+                else:
+                    params = [0., exc_params[0],
+                              exc_params[1], exc_params[1],
+                              0., exc_params[2],
+                              0, 1,
+                              0., c_]
+                _ = alch_cbf.addBond(hybrid_p1, hybrid_p2, params)
 
-                contains_unique = len(
-                    set(orig_indices).intersection(set(uniques))) > 0
+        return {'static': std_cbf, 'dynamic_mapped': alch_cbf, 'static_constraint': const_cbf}
 
-                if contains_unique:  # place this into the unique CustomBondForce
-                    is_uold = _force == self._old_nbf
-                    if is_uold:  # this is a unique old term, so new terms are all zero
-                        _params = [orig_nonidx_params[0], 0.,
-                                   c1 * c2, 0.,
-                                   orig_nonidx_params[1], orig_nonidx_params[1],  # sigma doesnt change
-                                   orig_nonidx_params[2], 0.]  # make new matches zero all around
-                    else:  # then it's unew
-                        _params = [0., orig_nonidx_params[0],
-                                   0., c1 * c2,
-                                   orig_nonidx_params[1], orig_nonidx_params[1],  # sigma doesnt change
-                                   0., orig_nonidx_params[2]]
-
-                    _ = lam_dep_unique_cbf.addBond(*hybrid_inds, _params)
-                    continue  # now all uniques are handled, we can skip the rest
-
-                # always query the opposite particle indices' (charges)
-                opp_particle_indices = [to_opposite_orig_map[_q] for _q in hybrid_inds]
-                opp_c1, _, _ = maybe_params_as_unitless(
-                    opp_force.getParticleParameters(opp_particle_indices[0]))
-                opp_c2, _, _ = maybe_params_as_unitless(
-                    opp_force.getParticleParameters(opp_particle_indices[1]))
-
-                try:  # get the exception from the opposite system
-                    opp_exc_idx = opp_exc_dict_to_query[sorted_hybrid_inds_str]
-                except Exception as e:  # the exception idx doesn't exist;
-                    opp_exc_idx = -1
-                if opp_exc_idx > -1:  # then this exception is mapped appropriately
-                    opposite_parameters = maybe_params_as_unitless(
-                        opp_force.getExceptionParameters(opp_exc_idx)[2:])
-                    if _force == self._old_nbf:  # only do this for the old force
-                        # since adding new force terms would be redundant
-                        old_charge, new_charge = orig_nonidx_params[0], opposite_parameters[0]
-                        old_charge_, new_charge_ = c1 * c2, opp_c1 * opp_c2
-                        old_sigma, new_sigma = orig_nonidx_params[1], opposite_parameters[1]
-                        old_epsilon, new_epsilon = orig_nonidx_params[2], opposite_parameters[2]
-
-                        # check if the parameters do not change at either endstate
-                        identical = are_nb_params_identical(oc=old_charge, nc=new_charge,
-                                                            os=old_sigma, ns=new_sigma, oe=old_epsilon, ne=new_epsilon,
-                                                            oc_=old_charge_, nc_=new_charge_)
-                        if identical:  # place into either lam_indep_cbf or constraint_cbf
-                            constraint_len = self._constraints_dict.get(tuple(sorted(hybrid_inds)), -1)
-                            if constraint_len < 0: # there is no constraint match; place in `lam_indep_cbf`
-                                _ = lam_indep_cbf.addBond(*hybrid_inds,
-                                                          [old_charge, old_charge_, old_sigma, old_epsilon])
-                            else:
-                                _ = constraint_cbf.addBond(*hybrid_inds,
-                                                           [old_charge, old_charge_, old_sigma, old_epsilon,
-                                                            constraint_len, constraint_len]) # constraint lengths are given plainly
-                        else:
-                            _ = lam_dep_cbf.addBond(*hybrid_inds,
-                                                    [old_charge, new_charge, old_charge_, new_charge_,
-                                                     old_sigma, new_sigma, old_epsilon, new_epsilon])
-                    else:  # iterative over new nbf is already handled above
-                        pass
-                else:  # then the exception exists in one force but not the other
-                    here_old_nbf = _force == self._old_nbf
-                    # this is the tricky bit, as we may need to softcore this interaction
-                    old_charge = orig_nonidx_params[0] if here_old_nbf else 0.
-                    new_charge = orig_nonidx_params[0] if not here_old_nbf else 0.
-                    old_charge_ = c1 * c2 if here_old_nbf else opp_c1 * opp_c2
-                    new_charge_ = c1 * c2 if not here_old_nbf else opp_c1 * opp_c2
-                    # keep sigma constant for stability
-                    old_sigma, new_sigma = orig_nonidx_params[1], orig_nonidx_params[1]
-                    old_epsilon = orig_nonidx_params[2] if here_old_nbf else 0.
-                    new_epsilon = orig_nonidx_params[2] if not here_old_nbf else 0.
-                    _params = [old_charge, new_charge, old_charge_, new_charge_,
-                               old_sigma, new_sigma, old_epsilon, new_epsilon]
-                    _ = lam_dep_cbf.addBond(*hybrid_inds, _params)
-
-        out_force_dict = {'static': lam_indep_cbf, 'dynamic_unique': lam_dep_unique_cbf, 'dynamic_mapped': lam_dep_cbf,
-                          'static_constraint': constraint_cbf}
-        return out_force_dict
+    def make_exceptions(self, **kwargs):
+        """call all `openmm.CustomBondForce` generators and return a dict"""
+        out_cbf_dict = {}
+        for gen in [self._make_inconsistent_exception_force, self._make_unique_exception_force, self._make_mapped_exception_forces]:
+            out_cbf_dict.update(gen(**kwargs))
+        return out_cbf_dict
 
     def _get_aux_self_terms(self, **kwargs):
         """get the self term"""
@@ -705,7 +790,7 @@ class SingleTopologyHybridNBFReactionFieldConverter():
         all_global_params.update(global_parameters)
         for gp_name, gp_val in all_global_params.items():  # add global params
             bf.addGlobalParameter(gp_name, gp_val)
-        energy_fn = ' '.join(aux_template).format(**rf_terms)
+        energy_fn = ' '.join(aux_template).format(**rf_terms).format(**self.NB_SOFTCORE_GLOBAL_PARAMETERS)
         bf.setEnergyFunction(energy_fn)
 
         # now add the terms
