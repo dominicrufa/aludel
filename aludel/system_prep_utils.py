@@ -138,7 +138,7 @@ def repair_constraint_mapping(
             to_del.append(new_idx)
 
     for idx in to_del:  # indices are `new`
-        old_idx = new_to_old_atom_map[idx]  # query the old member
+        old_idx = new_to_old_map[idx]  # query the old member
         del out_new_to_old_atom_map[idx]
         out_unique_olds.append(old_idx)
         out_unique_news.append(idx)
