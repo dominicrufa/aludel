@@ -180,7 +180,7 @@ def make_lj_V_ext(
     alch_hybrid_particles = np.sort(np.concatenate(identical_indices))
     
     # make parameter dict
-    parameter_dict = alfudel_V_ext_converter(alch_hybrid_particles, 
+    parameter_dict = aludel_V_ext_converter(alch_hybrid_particles, 
                                             alch_nbf, 
                                             solvent_nonbonded_params)
     map_identical_indices = jnp.array([find_idx(idx, identical_indices) for idx in alch_hybrid_particles])
