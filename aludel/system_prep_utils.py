@@ -64,19 +64,21 @@ def find_res_indices(omm_topology: openmm.app.Topology, resname: str = 'MOL'):
     return res_atom_indices
 
 
+def compute_distance_matrix(p1: np.array, p2: np.array) -> np.array:
+    """compute the distance between two position arrays"""
+    import jax
+    from jax import numpy as jnp
+    d = lambda a, b: jnp.linalg.norm(a - b)
+    vdis = jax.vmap(d, in_axes=(None, 0))
+    vvdis = jax.vmap(vdis, in_axes=(0,None))
+    return vvdis(p1, p2)
+
 def new_to_old_distance_mapper(old_mol_positions: np.array,
                                new_mol_positions: np.array,
                                distance_threshold: float = 0.02, **unused_kwargs) -> Dict[int, int]:
     """a means of creating a v1 `new_to_old` atom map where the map is defined by a distance threshold
     between any two atoms. it warrants inspection for scaffold hops"""
-    import jax
-    import jax_md
-
-    disp, _ = jax_md.space.free()
-    # make an N_old x N_new matrix of distances
-    distance_matrix = jax_md.space.map_product(
-        metric_or_displacement=jax_md.space.canonicalize_displacement_or_metric(disp))(new_mol_positions,
-                                                                                       old_mol_positions)
+    distance_matrix = compute_distance_matrix(old_mol_positions, new_mol_positions)
     threshold_bool = distance_matrix < distance_threshold  # make a boolean threshold
     old_to_new_matches = np.argwhere(threshold_bool)[::-1]  # reverse
 
@@ -235,8 +237,8 @@ class RenderSolventOMMObjects(object):
     """
 
     def __init__(self,
-                 ligand_old_sdf: str,  # the `ligand_old.sdf` to query
-                 ligand_new_sdf: str,  # the `ligand_new.sdf` to query,
+                 ligand_old: Molecule, 
+                 ligand_new: Molecule, 
                  SystemGenerator_kwargs: Dict[str, Any] = {
                      'forcefields': ['amber14/protein.ff14SB.xml', 'amber14/tip3p.xml'],
                      'small_molecule_forcefield': 'openff-1.3.0',
@@ -256,8 +258,8 @@ class RenderSolventOMMObjects(object):
         from openmmforcefields.generators import SystemGenerator
 
         # make openff.toolkit `molecules` from sdf files
-        self._Molecule_old = Molecule_from_sdf(ligand_old_sdf)
-        self._Molecule_new = Molecule_from_sdf(ligand_new_sdf)
+        self._Molecule_old = ligand_old
+        self._Molecule_new = ligand_new
 
         # make system gen first since it's used for all phases/endstates
         self._system_generator = SystemGenerator(
@@ -288,6 +290,7 @@ class RenderSolventOMMObjects(object):
         # make systems
         self._vacuum_omm_system_old = fix_barostat_in_place(
             self._system_generator.create_system(self._vacuum_omm_topology_old))
+
         self._vacuum_omm_system_new = fix_barostat_in_place(
             self._system_generator.create_system(self._vacuum_omm_topology_new))
 
