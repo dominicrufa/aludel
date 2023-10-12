@@ -284,8 +284,8 @@ class RenderSolventOMMObjects(object):
         self._vacuum_omm_topology_new = self._Molecule_new.to_topology().to_openmm()
 
         # old/new pos; these go to angstrom for some reason
-        self._vacuum_omm_positions_old = self._Molecule_old._conformers[0]
-        self._vacuum_omm_positions_new = self._Molecule_new._conformers[0]
+        self._vacuum_omm_positions_old = self._Molecule_old._conformers[0].to_openmm()
+        self._vacuum_omm_positions_new = self._Molecule_new._conformers[0].to_openmm()
 
         # make systems
         self._vacuum_omm_system_old = fix_barostat_in_place(
