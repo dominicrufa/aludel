@@ -11,8 +11,16 @@ from aludel.system_prep_utils import find_res_indices
 from openff.toolkit.topology import Molecule
 
 # target rf specifically
-from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter as Converter
-DEFAULT_SOFTCORE_PARAMETERS = Converter.NB_SOFTCORE_GLOBAL_PARAMETERS
+#from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter as Converter
+DEFAULT_SOFTCORE_PARAMETERS = {
+        'softcore_alpha': 0.5,
+        'softcore_beta': 0.5,
+        'softcore_b': 1,
+        'softcore_c': 6,
+        'softcore_d': 1,
+        'softcore_e': 1,
+        'softcore_f': 2
+    } # note these are slightly modified from the params in `alude.rf` for stable second derivatives
 
 #spline utilities
 # spline stuff
@@ -105,7 +113,9 @@ def sc_lj(r, lambda_select, # radius, lambda_select
 
     # lambda sub for `reff_lj`
     lam_sub = unique_old * lambda_select + unique_new * (1. - lambda_select)
-    reff_lj = res_s * (softcore_alpha * lam_sub**softcore_b + (r/res_s)**softcore_c)**(1./softcore_c)
+    reff_lj_term1 = softcore_alpha * (lam_sub**softcore_b)
+    reff_lj_term2 = (r/res_s)**softcore_c
+    reff_lj = res_s * (reff_lj_term1 + reff_lj_term2)**(1./softcore_c)
 
     # canonical softcore form/protect nans
     lj_x = (res_s / reff_lj)**6.
