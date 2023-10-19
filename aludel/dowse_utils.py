@@ -9,6 +9,8 @@ import numpy as np
 from aludel.utils import maybe_params_as_unitless
 from aludel.system_prep_utils import find_res_indices
 from openff.toolkit.topology import Molecule
+from flax import linen as nn
+import jaxopt
 
 # target rf specifically
 #from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter as Converter
@@ -87,12 +89,31 @@ def exclusive_cubic_spline_fn(x: float, xs: jnp.array, ys: jnp.array,
 
 
 # maker fns
+def pw_lin_to_quad_to_const(x: float, x_sw: float, y_max: float, **unused_kwargs):
+    """define a piecewise function of x s.t.
+    define a quadratic term w/ a y_max; 
+    the y_max defines an x_sw2 = 2*y_max - x_sw;
+    quadratic is defined by y = a * (x - x_sw2)^2 + y_max w/ a = 1. / (2. * (x_sw1 - x_sw2))
+    1. less than x_sw, return x;
+    2. between x_sw and x_sw2, return quadratic;
+    3. greater than x_sw2, return y_max
+    """
+    x_sw2 = 2 * y_max - x_sw # define x_sw2
+    a = 1. / (2. * (x_sw - x_sw2)) # eval a for quadratic
+    quad = lambda _x: a * (_x - x_sw2)**2 + y_max # define quad fn
+    lin_to_quad = lambda _x: jax.lax.select(_x < x_sw, _x, quad(_x)) # define linear_to_quadratic w/ lower bound
+
+    out = jax.lax.select(x > x_sw2,
+                        jnp.array([y_max]),
+                        jnp.array([lin_to_quad(x)]))[0]
+    return out
+
 def sc_lj(r, lambda_select, # radius, lambda_select
           os1, os2, ns1, ns2, # old sigma 1, old sigma 2, new sigma 1, new sigma 2
           oe1, oe2, ne1, ne2, # old epsilon 1, old epsilon 2, new epsilon 1, new epsilon 2
           uo1, uo2, un1, un2, # unique old 1, unique old 2, unique new 1, unique new 2
           softcore_alpha, softcore_b, softcore_c, # softcore parameters
-          lj_max = 99., **unused_kwargs) -> float: # max lj
+          lj_switch = 79., lj_max = 99., **unused_kwargs) -> float: # max lj
     """define a softcore lennard jones potential"""
     # uniques
     uo, un = uo1 + uo2, un1 + un2 # combiner for unique old/new
@@ -116,13 +137,14 @@ def sc_lj(r, lambda_select, # radius, lambda_select
     reff_lj_term1 = softcore_alpha * (lam_sub**softcore_b)
     reff_lj_term2 = (r/res_s)**softcore_c
     reff_lj = res_s * (reff_lj_term1 + reff_lj_term2)**(1./softcore_c)
+    #reff_lj = jax.lax.select(reff_lj <- 1e-6, 1e-6, reff_lj) # protect small reff_lj
 
     # canonical softcore form/protect nans
-    lj_x = (res_s / reff_lj)**6.
-    lj_e = jnp.array([4. * res_e * lj_x * (lj_x - 1.)])
-    lj_e = jnp.nan_to_num(lj_e, nan=jnp.inf)[0]
-    lj_e_out = jax.lax.select(lj_e > lj_max, lj_max, lj_e)
-    return lj_e_out
+    lj_x = (res_s / reff_lj)**6
+    lj_e = 4. * res_e * lj_x * (lj_x - 1.)
+    lj_e = jnp.nan_to_num(lj_e, nan=jnp.inf)
+    lj_e = pw_lin_to_quad_to_const(lj_e, lj_switch, lj_max) # add switching so its second order differentiable
+    return lj_e
 
 def aludel_V_ext_converter(alch_hybrid_particles: List, 
                            alch_nbf: openmm.CustomNonbondedForce, 
@@ -177,56 +199,118 @@ def find_idx(idx: int, list_of_indices: List[jnp.array]) -> int:
             return _count
     return None
 
+# NN stuff
+class MLP(nn.Module):
+    num_hidden_layers: int=1
+    dense_features: int=32
+    output_dimension: int=1
+    
+    @nn.compact
+    def __call__(self, x: jnp.array) -> jnp.array:
+        for _ in range(self.num_hidden_layers):
+            x = nn.Dense(self.dense_features)(x)
+            x = nn.swish(x)
+        return nn.Dense(self.output_dimension)(x)
+
+class LambdaSelector(nn.Module):
+    num_hidden_layers: int=1
+    dense_features: int=32
+    
+    @nn.compact
+    def __call__(self, _lambda_global, unique_idx, max_idx):
+        x = jnp.array([_lambda_global, unique_idx / max_idx])
+        spec_val = MLP(num_hidden_layers=self.num_hidden_layers, 
+                       dense_features=self.dense_features, 
+                       output_dimension=1)(x)
+        suited_val = 0.5 * (1. + nn.tanh(spec_val)) # suited value is bound between 0, 1 exclusively
+        perturbation = (-(2. * _lambda_global - 1.)**2 + 1.) * suited_val * (1. - _lambda_global) # perturbation goes to 0 at roots _lambda_global=(0, 1)
+        return _lambda_global + perturbation
+
+def make_lambda_selector_fn(max_idx: int,
+                            pre_linearize: bool=True, 
+                            num_hidden_layers: int=1, 
+                            dense_features: int=32, 
+                            **unused_kwargs) -> Callable[[float, int, int], float]:
+    """initialize and (maybe) pretrain an instance of `LambdaSelector`"""
+    model = LambdaSelector(num_hidden_layers, dense_features)
+    inits = (.5, 1, max_idx) # lam_global, idx, max_idx
+    untrained_params = model.init(jax.random.PRNGKey(42), *inits)
+    try_out = model.apply(untrained_params, *inits) # run it for good measure
+    
+    # define the function
+    def lambda_selector_fn(params, lambda_global, idx):
+        return model.apply(params, lambda_global, idx, max_idx).sum() # sum is just to turn an array of len 1 into a float return
+
+    # linearize the function
+    if pre_linearize:
+        def _loss_fn(params, lambda_global, idx):
+            learned_val = lambda_selector_fn(params, lambda_global, idx)
+            target_val = lambda_global
+            return (learned_val - target_val)**2
+
+        loss_over_idx = jax.vmap(_loss_fn, in_axes=(None, None, 0))
+        loss_over_lam_glob = jax.vmap(loss_over_idx, in_axes=(None, 0, None))
+        loss_fn = lambda params: loss_over_lam_glob(params, jnp.linspace(0, 1, 100), jnp.arange(0, max_idx+1)).sum()
+        
+        # optimizer
+        solver = jaxopt.LBFGS(loss_fn)
+        res = solver.run(untrained_params)
+        out_params, out_state = res.params, res.state
+    else:
+        out_params, out_state = untrained_params, None
+    return lambda_selector_fn, out_params, untrained_params, out_state
+
+# now the meat
 def make_lj_V_ext(
-        identical_indices: List[np.array], 
-        alch_nbf: openmm.CustomNonbondedForce, 
-        solvent_nonbonded_params: Dict[str, float] = {'sigma': [0.3150752406575124 * unit.nanometer],
-                                                    'epsilon': [0.635968 * unit.kilojoule_per_mole]},
-        softcore_parameters: Dict[str, float] = DEFAULT_SOFTCORE_PARAMETERS,
-        num_spline_knots: int=20,
-        **unused_kwargs) -> Tuple[jnp.array, Callable[[jnp.array, float], Dict[str, jnp.array]], Callable[float, Dict[str, jnp.array]]]:
+    identical_indices: List[np.array], 
+    alch_nbf: openmm.CustomNonbondedForce, 
+    solvent_nonbonded_params: Dict[str, float] = {'sigma': [0.3150752406575124 * unit.nanometer],
+                                                'epsilon': [0.635968 * unit.kilojoule_per_mole]},
+    softcore_parameters: Dict[str, float] = DEFAULT_SOFTCORE_PARAMETERS,
+    pre_linearize: bool=True, 
+    num_hidden_layers: int=1, 
+    dense_features: int=32, 
+    **unused_kwargs) -> Tuple[jnp.array, Callable[[jnp.array, float], Dict[str, jnp.array]], Callable[float, Dict[str, jnp.array]]]:
     """create a function that generates parameters for the `V_ext` and return init y-axis knots for a cubic spline"""
-    num_unique_indices = len(identical_indices)
-    alch_hybrid_particles = np.sort(np.concatenate(identical_indices))
+    num_unique_indices = len(identical_indices) # get the number of unique indices
+    alch_hybrid_particles = np.sort(np.concatenate(identical_indices)) # sort all the alchemical hybrid particles
     
     # make parameter dict
     parameter_dict = aludel_V_ext_converter(alch_hybrid_particles, 
                                             alch_nbf, 
                                             solvent_nonbonded_params)
+    # determine the mapping indices of the `alch_hybrid_particles`
     map_identical_indices = jnp.array([find_idx(idx, identical_indices) for idx in alch_hybrid_particles])
     
-    # check identical particle parameters
+    # check identical particle parameters as a consistency test
     for identical in identical_indices:
         check_identical_particles(identical, parameter_dict)
-        
-    # initialize the splines
-    x = jnp.linspace(0, 1, num_spline_knots)
-    ys_init = jnp.repeat(x[jnp.newaxis, ...], repeats=num_unique_indices, axis=0)
-    spline_coeff_fn = make_spline_coeffs(x)
 
     # make V_ext
     V_ext = lambda r, _dict: sc_lj(r, **_dict, **softcore_parameters)
 
+    # make a selection function that replaces learned `lambda_select` with `lambda_global` if the solute is not unique 
     def lambda_select_modifier(lambda_select: jnp.array, uo1: int, un1: int, lambda_global: float, **unused_kwargs):
         return jax.lax.select(jnp.isclose(uo1+un1, 0.), lambda_global, lambda_select)
+
+    # create lambda selector_fn
+    lambda_selector_fn, out_params, untrained_params, out_state = make_lambda_selector_fn(
+        max_idx = num_unique_indices-1,
+        pre_linearize = pre_linearize, 
+        num_hidden_layers = num_hidden_layers, 
+        dense_features = dense_features)
         
     # write function to generate `lambda_select`; xs are partialed out
-    def V_ext_kwarg_generator(ys: jnp.array, # [N_unique_indices, num_spline_knots]
-                              lambda_global: float, **unused_kwargs) -> Dict[str, jnp.array]:
+    def V_ext_kwarg_generator(params: Dict[str, jnp.array], lambda_global: float, **unused_kwargs) -> Dict[str, jnp.array]:
         """generates the vmapped `Dict` for `V_ext`;"""
-        # restrict the y endpoints to 0, 1 and set abs
-        ys = ys.at[:,0].set(0.)
-        ys = ys.at[:,-1].set(1.) 
-        bs, cs, ds = jax.vmap(spline_coeff_fn)(ys)
-        lambda_selects = jnp.abs(jax.vmap(exclusive_cubic_spline_fn, 
-                                  in_axes=(None,None, 0, 0, 0, 0))(lambda_global, x, ys, bs, cs, ds)) # positive
+        lambda_selects = jax.vmap(lambda_selector_fn, in_axes=(None, None, 0))(params, lambda_global, jnp.arange(num_unique_indices))
         _dict = {key: val for key, val in parameter_dict.items()}
         _lam_selects = jnp.array([lambda_selects[q] for q in map_identical_indices])
         mod_lam_selects = jax.vmap(lambda_select_modifier, in_axes=(0,0,0,None))(_lam_selects, _dict['uo1'], _dict['un1'], lambda_global)
         _dict['lambda_select'] = mod_lam_selects
         return _dict
 
-    return ys_init, V_ext_kwarg_generator, V_ext
+    return out_params, V_ext_kwarg_generator, V_ext, out_state
 
 # fingerprinting for unique particles
 def compute_atom_centered_fingerprints(mol,
