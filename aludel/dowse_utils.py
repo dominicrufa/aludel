@@ -223,8 +223,7 @@ class LambdaSelector(nn.Module):
                        dense_features=self.dense_features, 
                        output_dimension=1)(x)
         suited_val = 0.5 * (1. + nn.tanh(spec_val)) # suited value is bound between 0, 1 exclusively
-        perturbation = (-(2. * _lambda_global - 1.)**2 + 1.) * suited_val * (1. - _lambda_global) # perturbation goes to 0 at roots _lambda_global=(0, 1)
-        return _lambda_global + perturbation
+        return _lambda_global + jnp.sin(jnp.pi * _lambda_global) * suited_val * (1. - _lambda_global)
 
 def make_lambda_selector_fn(max_idx: int,
                             pre_linearize: bool=True, 
