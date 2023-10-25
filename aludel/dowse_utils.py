@@ -112,9 +112,14 @@ def sc_lj(r, lambda_select, # radius, lambda_select
           os1, os2, ns1, ns2, # old sigma 1, old sigma 2, new sigma 1, new sigma 2
           oe1, oe2, ne1, ne2, # old epsilon 1, old epsilon 2, new epsilon 1, new epsilon 2
           uo1, uo2, un1, un2, # unique old 1, unique old 2, unique new 1, unique new 2
-          softcore_alpha, softcore_b, softcore_c, # softcore parameters
-          lj_switch = 79., lj_max = 99., **unused_kwargs) -> float: # max lj
+          softcore_alpha: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_alpha'], 
+          softcore_b: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_b'], 
+          softcore_c: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_c'], # softcore parameters
+          lj_switch: float=79., 
+          lj_max: float=99., 
+          **unused_kwargs) -> float: # max lj
     """define a softcore lennard jones potential"""
+
     # uniques
     uo, un = uo1 + uo2, un1 + un2 # combiner for unique old/new
     unique_old = jax.lax.select(uo >= 1, 1, 0)
@@ -138,6 +143,46 @@ def sc_lj(r, lambda_select, # radius, lambda_select
     reff_lj_term2 = (r/res_s)**softcore_c
     reff_lj = res_s * (reff_lj_term1 + reff_lj_term2)**(1./softcore_c)
     #reff_lj = jax.lax.select(reff_lj <- 1e-6, 1e-6, reff_lj) # protect small reff_lj
+
+    # canonical softcore form/protect nans
+    lj_x = (res_s / reff_lj)**6
+    lj_e = 4. * res_e * lj_x * (lj_x - 1.)
+    lj_e = jnp.nan_to_num(lj_e, nan=jnp.inf)
+    lj_e = pw_lin_to_quad_to_const(lj_e, lj_switch, lj_max) # add switching so its second order differentiable
+    return lj_e
+
+def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
+          os1, os2, ns1, ns2, # old sigma 1, old sigma 2, new sigma 1, new sigma 2
+          oe1, oe2, ne1, ne2, # old epsilon 1, old epsilon 2, new epsilon 1, new epsilon 2
+          uo1, uo2, un1, un2, # unique old 1, unique old 2, unique new 1, unique new 2
+          softcore_alpha: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_alpha'], 
+          softcore_b: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_b'], 
+          softcore_c: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_c'], # softcore parameters
+          lj_switch: float=79., 
+          lj_max: float=99., 
+          **unused_kwargs) -> float: # max lj
+    """define a softcore lennard jones potential"""
+    
+    # uniques
+    uo, un = uo1 + uo2, un1 + un2 # combiner for unique old/new
+    unique_old = jax.lax.select(uo >= 1, 1, 0)
+    unique_new = jax.lax.select(un >= 1, 1, 0)
+
+    # sigmas
+    os = 0.5 * (os1 + os2)
+    ns = 0.5 * (ns1 + ns2)
+
+    # epsilons
+    oe = jnp.sqrt(oe1 * oe2)
+    ne = jnp.sqrt(ne1 * ne2)
+
+    # scaling sigma, epsilon by lambda_global
+    res_s = os + lambda_global * (ns - os)
+    res_e = oe + lambda_global * (ne - oe)
+
+    # lambda sub for `reff_lj`
+    lam_sub = unique_old * lambda_select * lambda_global + unique_new * lambda_select * (1. - lambda_global)
+    reff_lj = r + lam_sub
 
     # canonical softcore form/protect nans
     lj_x = (res_s / reff_lj)**6
@@ -218,12 +263,11 @@ class LambdaSelector(nn.Module):
     
     @nn.compact
     def __call__(self, _lambda_global, unique_idx, max_idx):
-        x = jnp.array([_lambda_global, unique_idx / max_idx])
+        x = jnp.array([_lambda_global, unique_idx / (max_idx+1)]) # protect against nan
         spec_val = MLP(num_hidden_layers=self.num_hidden_layers, 
                        dense_features=self.dense_features, 
                        output_dimension=1)(x)
-        suited_val = 0.5 * (1. + nn.tanh(spec_val)) # suited value is bound between 0, 1 exclusively
-        return _lambda_global + jnp.sin(jnp.pi * _lambda_global) * suited_val * (1. - _lambda_global)
+        return spec_val
 
 def make_lambda_selector_fn(max_idx: int,
                             pre_linearize: bool=True, 
@@ -238,13 +282,13 @@ def make_lambda_selector_fn(max_idx: int,
     
     # define the function
     def lambda_selector_fn(params, lambda_global, idx):
-        return model.apply(params, lambda_global, idx, max_idx).sum() # sum is just to turn an array of len 1 into a float return
+        return model.apply(params, lambda_global, idx, max_idx).sum()**2
 
     # linearize the function
     if pre_linearize:
         def _loss_fn(params, lambda_global, idx):
             learned_val = lambda_selector_fn(params, lambda_global, idx)
-            target_val = lambda_global
+            target_val = DEFAULT_SOFTCORE_PARAMETERS['softcore_alpha']
             return (learned_val - target_val)**2
 
         loss_over_idx = jax.vmap(_loss_fn, in_axes=(None, None, 0))
@@ -286,7 +330,7 @@ def make_lj_V_ext(
         check_identical_particles(identical, parameter_dict)
 
     # make V_ext
-    V_ext = lambda r, _dict: sc_lj(r, **_dict, **softcore_parameters)
+    V_ext = lambda r, _dict: sc_v2(r, **_dict, **softcore_parameters)
 
     # make a selection function that replaces learned `lambda_select` with `lambda_global` if the solute is not unique 
     def lambda_select_modifier(lambda_select: jnp.array, uo1: int, un1: int, lambda_global: float, **unused_kwargs):
@@ -307,9 +351,10 @@ def make_lj_V_ext(
         _lam_selects = jnp.array([lambda_selects[q] for q in map_identical_indices])
         mod_lam_selects = jax.vmap(lambda_select_modifier, in_axes=(0,0,0,None))(_lam_selects, _dict['uo1'], _dict['un1'], lambda_global)
         _dict['lambda_select'] = mod_lam_selects
+        _dict['lambda_global'] = jnp.repeat(lambda_global, len(mod_lam_selects))
         return _dict
 
-    return out_params, V_ext_kwarg_generator, V_ext, out_state
+    return out_params, V_ext_kwarg_generator, V_ext, out_state, lambda_selector_fn
 
 # fingerprinting for unique particles
 def compute_atom_centered_fingerprints(mol,
