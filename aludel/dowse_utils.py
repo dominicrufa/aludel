@@ -9,8 +9,10 @@ import numpy as np
 from aludel.utils import maybe_params_as_unitless
 from aludel.system_prep_utils import find_res_indices
 from openff.toolkit.topology import Molecule
+import functools
 from flax import linen as nn
 import jaxopt
+import scipy
 
 # target rf specifically
 #from aludel.rf import SingleTopologyHybridNBFReactionFieldConverter as Converter
@@ -191,6 +193,51 @@ def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
     lj_e = pw_lin_to_quad_to_const(lj_e, lj_switch, lj_max) # add switching so its second order differentiable
     return lj_e
 
+# spatial helper fns
+def aperiodic_3D_distance(x: float, y: float, z: float, 
+                                    x0: float, y0: float, z0: float) -> float:
+    """compute the aperiodic euclidean distance between (x,y,z) and (x0,y0,z0)"""
+    r2 = (x - x0)**2 + (y - y0)**2 + (z - z0)**2
+    return jnp.sqrt(r2)
+
+def vectorize_aperiodic_3D_distance(X: jnp.array, Y: jnp.array, Z: jnp.array, 
+    x0: float, y0: float, z0: float) -> jnp.array:
+    """vmap the x, y, z components of `aperiodic_3D_distance` on a 3D grid"""
+    out_fn = jax.vmap(
+        jax.vmap(
+            jax.vmap(aperiodic_3D_distance, in_axes=(0,0,0,None,None,None)),
+            in_axes=(0,0,0,None,None,None)),
+        in_axes=(0,0,0,None,None,None))
+    return out_fn(X, Y, Z, x0, y0, z0)
+
+def cartesian_linspaces_and_retsteps(limits: jnp.array, 
+                                     num_gridpoints_per_dim: float) -> Tuple[jnp.array, jnp.array]:
+    """given a `limits` (shape [n_dim, 2]) for each dimension and a `num_gridpoints_per_dim` [n_dim],
+    generate linspaces and retstep sizes for each dimension"""
+    partial_linspaces = functools.partial(jnp.linspace, num = num_gridpoints_per_dim, retstep=True)
+    cartesian_linspaces, d_spatial = jax.vmap(partial_linspaces)(limits[:,0], limits[:,1])
+    return cartesian_linspaces, d_spatial
+
+def make_cartesian_spatial_grid(limits: jnp.array, 
+                                num_gridpoints_per_dim: float, 
+                                **unused_kwargs) -> Tuple[jnp.array]:
+    """compute a cartesian spatial grid given an `[n_dim, 2]` array of dimensions, an [n_dim] array for `num_gridpoints`.
+    returns a tuple. the first is a tuple of (n_dim, [*num_gridpoints]), and the second is a [n_dim] array of spatial 
+    gridpoint sizes"""
+    cartesian_linspaces, d_spatial = cartesian_linspaces_and_retsteps(limits, num_gridpoints_per_dim)
+    cartesian_grids = jnp.meshgrid(*cartesian_linspaces, indexing='ij')
+    return cartesian_grids, d_spatial
+
+def reference_posit_r_array(X: jnp.array, Y: jnp.array, Z: jnp.array, 
+                             reference_posits: jnp.array) -> jnp.array:
+    """given X,Y,Z grids and a [n_points, 3] array of points, compute an [n_points, _X, _Y, _Z] array (where _Q is the number
+    of grid points in the Q direction) where each entry along the leading axis is the 
+    distance from `n_point` to each grid site"""
+    ref_xs, ref_ys, ref_zs = reference_posits[:,0], reference_posits[:,1], reference_posits[:,2]
+    out = jax.vmap(vectorize_aperiodic_3D_distance, # vectorize along the reference positions
+                   in_axes=(None, None, None, 0,0,0))(X, Y, Z, ref_xs, ref_ys, ref_zs)
+    return out
+
 def aludel_V_ext_converter(alch_hybrid_particles: List, 
                            alch_nbf: openmm.CustomNonbondedForce, 
                            solvent_nonbonded_params: Dict[str, float],
@@ -344,14 +391,13 @@ def make_lj_V_ext(
         dense_features = dense_features)
         
     # write function to generate `lambda_select`; xs are partialed out
-    def V_ext_kwarg_generator(params: Dict[str, jnp.array], lambda_global: float, **unused_kwargs) -> Dict[str, jnp.array]:
+    def V_ext_kwarg_generator(particle_idx: int, params: Dict[str, jnp.array], lambda_global: float, **unused_kwargs) -> Dict[str, jnp.array]:
         """generates the vmapped `Dict` for `V_ext`;"""
-        lambda_selects = jax.vmap(lambda_selector_fn, in_axes=(None, None, 0))(params, lambda_global, jnp.arange(num_unique_indices))
-        _dict = {key: val for key, val in parameter_dict.items()}
-        _lam_selects = jnp.array([lambda_selects[q] for q in map_identical_indices])
-        mod_lam_selects = jax.vmap(lambda_select_modifier, in_axes=(0,0,0,None))(_lam_selects, _dict['uo1'], _dict['un1'], lambda_global)
-        _dict['lambda_select'] = mod_lam_selects
-        _dict['lambda_global'] = jnp.repeat(lambda_global, len(mod_lam_selects))
+        unique_idx = map_identical_indices[particle_idx]
+        lambda_select = lambda_selector_fn(params, lambda_global, unique_idx)
+        _dict = {key: val[particle_idx] for key, val in parameter_dict.items()}
+        mod_lam_select = lambda_select_modifier(lambda_select, _dict['uo1'], _dict['un1'], lambda_global)
+        _dict['lambda_select'] = mod_lam_select
         return _dict
 
     return out_params, V_ext_kwarg_generator, V_ext, out_state, lambda_selector_fn
@@ -360,7 +406,7 @@ def make_lj_V_ext(
 def compute_atom_centered_fingerprints(mol,
                                        generator,
                                        fpSize,
-                                       normalize = True):
+                                       normalize=True):
     """
     compute an atom-centric fingerprint of a molecule. You need `rdkit`
 
@@ -486,3 +532,150 @@ def make_identical_particles_list(
 
     out_posits = hybrid_positions[to_keep, :]
     return out_unique_particles, out_posits.value_in_unit_system(unit.md_unit_system)
+
+# loss utilities
+def make_loss_utilities(
+        solute_positions: jnp.array,
+        V_ext_kwarg_generator_fn: Callable[[int, Dict[str, jnp.array], float], Dict[str, jnp.array]],
+        V_ext_fn: Callable[[float, Dict[str, jnp.array]], float],  # call params, lambda_global
+        grid_limits: jnp.array = jnp.array([[-1., 1.], [-1., 1.], [-1., 1.]]),
+        num_gridpoints: int = 64,
+        **unused_kwargs) -> Tuple[Callable[float, Callable[[jnp.array, float, Dict, jnp.array], jnp.array]],
+jnp.array,
+jnp.array]:
+    """function to create utilities to place into the loss function;
+    returns the following:
+    1. `make_vmap_V_ext`: a utility function to create derivatives of vmapped
+        (w.r.t. all solute positions and spatial grids) `V_ext` w.r.t. lambda global
+    2. `V_ext_R_arr`: an array of shape [num_solute_positions, gridX, gridY, gridZ]
+    3. `grid_sizes`: an array of shape [3,] that has the grid sizes in X, Y, Z directions
+    """
+    # center solute positions
+    solute_positions = solute_positions - jnp.mean(solute_positions, axis=0)
+
+    # manage the grid
+    (X, Y, Z), (dx, dy, dz) = make_cartesian_spatial_grid(grid_limits,
+                                                          num_gridpoints)  # make grids and corresponding spacing
+    grid_sizes = jnp.array([dx, dy, dz])
+    grid_centers = (grid_limits[:, 0] + grid_limits[:, 1]) / 2.
+    R = vectorize_aperiodic_3D_distance(X, Y, Z, *grid_centers)  # make full R matrix [n, n, n]
+    V_ext_R_arr = reference_posit_r_array(X, Y, Z,
+                                          reference_posits=solute_positions)  # make grid rs [n_solute, _X, _Y, _Z]
+
+    # make V_ext_fn; vmap along solute particles
+    def V_ext(r, lambda_global, params, idx):
+        V_dict = V_ext_kwarg_generator_fn(idx, params, lambda_global)
+        V_dict['lambda_global'] = lambda_global
+        return V_ext_fn(r, V_dict)
+
+    # make vmap fn
+    def make_vmap_V_ext(num_derivatives):
+        """take `num_derivatives` of `V_ext` w.r.t. `lambda_global` (argnum=1)"""
+        out_fn = V_ext
+        for i in range(num_derivatives):  # take derivatives w.r.t. argnum 1 (lambda_global)
+            out_fn = jax.grad(out_fn, argnums=1)
+        spatial_arr_fn = jax.vmap(
+            jax.vmap(jax.vmap(out_fn, in_axes=(0, None, None, None)), in_axes=(0, None, None, None)),
+            in_axes=(0, None, None, None))
+        spatial_arr_on_solute_fn = jax.vmap(spatial_arr_fn, in_axes=(0, None, None, 0))
+        return spatial_arr_on_solute_fn
+
+    return make_vmap_V_ext, V_ext_R_arr, grid_sizes
+
+def dict_to_array_utilities(
+        example_dict: Dict[Any, Any],
+        **unused_kwargs) -> Tuple[Callable[Dict, jnp.array], Callable[jnp.array, Dict]]:
+    """simple utility functions to convert from a nested pytree to a flat 1D array and back;
+    this is useful when using scipy utilities that require numpy arrays instead of arbitrary pytrees"""
+    list_init_params, pytree_def = jax.tree_util.tree_flatten(
+        example_dict)  # make a list of numpy arrays and a pytree def
+    list_shapes = [i.shape for i in list_init_params]  # get the shapes of each array
+    flat_list_init_params = [i.flatten() for i in list_init_params]  # flatten each array
+    flat_list_lengths = [len(i) for i in flat_list_init_params]  # get the size of each flat array
+    flat_init_params = jnp.concatenate(flat_list_init_params)  # concatenate the initial parameters
+    list_length_cumsum = jnp.concatenate([jnp.array([0]), jnp.cumsum(jnp.array(flat_list_lengths))])  # get the start_stop indices to gather
+    list_indices = [jnp.arange(list_length_cumsum[i], list_length_cumsum[i+1]) for i in range(len(list_length_cumsum)-1)]
+
+    def pytree_to_flat_params(pytree):
+        _list, _ = jax.tree_util.tree_flatten(pytree)
+        return jnp.concatenate([i.flatten() for i in _list])
+
+    def flat_params_to_pytree(flat_params):
+        _list = [jnp.take(flat_params, indices) for indices in list_indices]
+        _resh_list = [entry.reshape(shape) for entry, shape in zip(_list, list_shapes)]
+        return jax.tree_util.tree_unflatten(pytree_def, _resh_list)
+
+    return pytree_to_flat_params, flat_params_to_pytree
+
+# loss
+def make_loss_and_aux(
+        initial_parameters_dict: Dict[str, jnp.array],
+        make_vmap_V_ext: Callable[float, Callable[[jnp.array, float, Dict[str, jnp.array]], jnp.array]],
+        V_ext_R_array: jnp.array,
+        grid_sizes: jnp.array,
+        n0: float,
+        kT: float,
+        **unused_kwargs) -> Tuple[Callable]:
+    """a function to generate a loss function for parameter optimization;
+    functions have to be re-wrapped to make them `scipy.integrate.quad_vec`-compatible
+    since an integral over `lambda_global` is needed to compute the loss and its derivative w.r.t. optimizable parameters"""
+    num_solute_particles = V_ext_R_array.shape[0]
+
+    # make params flatten/unflatten utils for `quad_vec`
+    pytree_to_flat_params, flat_params_to_pytree = dict_to_array_utilities(initial_parameters_dict)
+
+    U = make_vmap_V_ext(0)  # take `V_ext_R_array`, `lambda_global`, `params`, `indices`; do 0 derivatives
+    dU_dlam = make_vmap_V_ext(1)  # do 1 derivative
+    d2U_dlam2 = make_vmap_V_ext(2)  # do 2 deriviatives
+
+    # NOTE: all derivatives ^ are taken w.r.t. `lambda_global`
+
+    def density(lambda_global: float, parameters: Dict):  # compute the solvent density on grid
+        Us = U(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(axis=0)
+        return jnp.exp(-Us / kT) * n0  # exponential of (negative) Us gives g0
+
+    def mean_du_dlam(lambda_global: float, parameters: Dict):  # compute the expectation of du/dlambda
+        n = density(lambda_global, parameters)
+        _mean_du_dlam = dU_dlam(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(
+            axis=0) * n / kT
+        return jnp.sum(_mean_du_dlam * jnp.prod(grid_sizes))
+
+    def mean_d2u_dlam2(lambda_global: float, parameters: Dict):  # compute the expectation of d2u/dlam2
+        n = density(lambda_global, parameters)
+        _mean_d2u_dlam2 = d2U_dlam2(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(
+            axis=0) * n / kT
+        return jnp.sum(_mean_d2u_dlam2 * jnp.prod(grid_sizes))
+
+    def naught_weighted_U(lambda_global,
+                          parameters: Dict):  # compute the expectation of U another way (used for validation test)
+        n = jax.lax.stop_gradient(density(lambda_global, parameters))
+        us = U(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(axis=0) / kT
+        return jnp.sum(us * n * jnp.prod(grid_sizes))
+
+    def concat_valgrad_mean_d2u_dlam2_4quadvec(lambda_global: float, flat_params: jnp.array):
+        # generate a val/grad concatenated vector of `mean_d2u_dlam2` that is compatible w/ `quad_vec`
+        val, grad = jax.value_and_grad(mean_d2u_dlam2, argnums=1)(lambda_global, flat_params_to_pytree(flat_params))
+        return jnp.concatenate([jnp.array([val]), pytree_to_flat_params(grad)])
+
+    def valgrad_mean_du_dlam_4quadvec(lambda_global: float, flat_params: jnp.array):
+        # generate a val/grad of `mean_du_dlam`
+        val, grad = jax.value_and_grad(mean_du_dlam, argnums=1)(lambda_global, flat_params_to_pytree(flat_params))
+        return val, grad
+
+    # jit functions used in loss.
+    concat_valgrad_mean_d2u_dlam2_4quadvec = jax.jit(concat_valgrad_mean_d2u_dlam2_4quadvec)
+    valgrad_mean_du_dlam = jax.jit(valgrad_mean_du_dlam_4quadvec)
+
+    def loss_val_grad(flat_params, **quad_kwargs):  # final loss (val/grad) fn
+        dloss_valgrad, dloss_valgrad_err = scipy.integrate.quad_vec(
+            concat_valgrad_mean_d2u_dlam2_4quadvec,
+            0, 1, args=(flat_params,),
+            **quad_kwargs)
+        val1, grad1 = valgrad_mean_du_dlam(1., flat_params)
+        val0, grad0 = valgrad_mean_du_dlam(0., flat_params)
+
+        out_val = dloss_valgrad[0] - (val1 - val0)
+        out_grad = dloss_valgrad[1:] - (grad1 - grad0)
+        return out_val, out_grad
+
+    return pytree_to_flat_params, flat_params_to_pytree, density, mean_du_dlam, mean_d2u_dlam2, loss_val_grad, naught_weighted_U
