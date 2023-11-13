@@ -660,6 +660,7 @@ def make_loss_and_aux(
     def valgrad_mean_du_dlam_4quadvec(lambda_global: float, flat_params: jnp.array):
         # generate a val/grad of `mean_du_dlam`
         val, grad = jax.value_and_grad(mean_du_dlam, argnums=1)(lambda_global, flat_params_to_pytree(flat_params))
+        grad = pytree_to_flat_params(grad) # have to make flat for `quad_vec`
         return val, grad
 
     # jit functions used in loss.
