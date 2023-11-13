@@ -184,7 +184,7 @@ def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
 
     # lambda sub for `reff_lj`
     lam_sub = unique_old * lambda_select * lambda_global + unique_new * lambda_select * (1. - lambda_global)
-    reff_lj = r + lam_sub
+    reff_lj = r/res_s + lam_sub
 
     # canonical softcore form/protect nans
     lj_x = (res_s / reff_lj)**6
