@@ -24,7 +24,7 @@ DEFAULT_SOFTCORE_PARAMETERS = {
         'softcore_d': 1,
         'softcore_e': 1,
         'softcore_f': 2
-    } # note these are slightly modified from the params in `alude.rf` for stable second derivatives
+    } # note these are slightly modified from the params in `aludel.rf` for stable second derivatives
 
 #spline utilities
 # spline stuff
@@ -615,11 +615,19 @@ def make_loss_and_aux(
         grid_sizes: jnp.array,
         n0: float,
         kT: float,
+        optimize_by_unique_particle: bool=True,
         **unused_kwargs) -> Tuple[Callable]:
     """a function to generate a loss function for parameter optimization;
     functions have to be re-wrapped to make them `scipy.integrate.quad_vec`-compatible
-    since an integral over `lambda_global` is needed to compute the loss and its derivative w.r.t. optimizable parameters"""
+    since an integral over `lambda_global` is needed to compute the loss and its derivative w.r.t. optimizable parameters;
+    `optimize_by_unique_particle` determines whether each particle will have its own protocol or whether
+    all particles will share a protocol."""
     num_solute_particles = V_ext_R_array.shape[0]
+    particle_indices = jnp.arange(num_solute_particles)
+    if not optimize_by_unique_particle: # take only protocol of 0th index
+        particle_indices = 0 * particle_indices
+
+
 
     # make params flatten/unflatten utils for `quad_vec`
     pytree_to_flat_params, flat_params_to_pytree = dict_to_array_utilities(initial_parameters_dict)
@@ -631,25 +639,25 @@ def make_loss_and_aux(
     # NOTE: all derivatives ^ are taken w.r.t. `lambda_global`
 
     def density(lambda_global: float, parameters: Dict):  # compute the solvent density on grid
-        Us = U(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(axis=0)
+        Us = U(V_ext_R_array, lambda_global, parameters, particle_indices).sum(axis=0)
         return jnp.exp(-Us / kT) * n0  # exponential of (negative) Us gives g0
 
     def mean_du_dlam(lambda_global: float, parameters: Dict):  # compute the expectation of du/dlambda
         n = density(lambda_global, parameters)
-        _mean_du_dlam = dU_dlam(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(
+        _mean_du_dlam = dU_dlam(V_ext_R_array, lambda_global, parameters, particle_indices).sum(
             axis=0) * n / kT
         return jnp.sum(_mean_du_dlam * jnp.prod(grid_sizes))
 
     def mean_d2u_dlam2(lambda_global: float, parameters: Dict):  # compute the expectation of d2u/dlam2
         n = density(lambda_global, parameters)
-        _mean_d2u_dlam2 = d2U_dlam2(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(
+        _mean_d2u_dlam2 = d2U_dlam2(V_ext_R_array, lambda_global, parameters, particle_indices).sum(
             axis=0) * n / kT
         return jnp.sum(_mean_d2u_dlam2 * jnp.prod(grid_sizes))
 
     def naught_weighted_U(lambda_global,
                           parameters: Dict):  # compute the expectation of U another way (used for validation test)
         n = jax.lax.stop_gradient(density(lambda_global, parameters))
-        us = U(V_ext_R_array, lambda_global, parameters, jnp.arange(num_solute_particles)).sum(axis=0) / kT
+        us = U(V_ext_R_array, lambda_global, parameters, particle_indices).sum(axis=0) / kT
         return jnp.sum(us * n * jnp.prod(grid_sizes))
 
     def concat_valgrad_mean_d2u_dlam2_4quadvec(lambda_global: float, flat_params: jnp.array):
@@ -660,7 +668,7 @@ def make_loss_and_aux(
     def valgrad_mean_du_dlam_4quadvec(lambda_global: float, flat_params: jnp.array):
         # generate a val/grad of `mean_du_dlam`
         val, grad = jax.value_and_grad(mean_du_dlam, argnums=1)(lambda_global, flat_params_to_pytree(flat_params))
-        grad = pytree_to_flat_params(grad) # have to make flat for `quad_vec`
+        grad = pytree_to_flat_params(grad)# have to make flat for `quad_vec`
         return val, grad
 
     # jit functions used in loss.
