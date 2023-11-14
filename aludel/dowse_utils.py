@@ -170,6 +170,10 @@ def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
     unique_old = jax.lax.select(uo >= 1, 1, 0)
     unique_new = jax.lax.select(un >= 1, 1, 0)
 
+    # separate `lambda_select`
+    lam_sub_select = lambda_select[0] # given as positive (must be)
+    epsilon_select = lambda_select[1] # not necessarily positive
+
     # sigmas
     os = 0.5 * (os1 + os2)
     ns = 0.5 * (ns1 + ns2)
@@ -180,10 +184,10 @@ def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
 
     # scaling sigma, epsilon by lambda_global
     res_s = os + lambda_global * (ns - os)
-    res_e = oe + lambda_global * (ne - oe)
+    res_e = oe + lambda_global * (ne - oe) * (1. + 2. * (unique_old + unique_new) * jnp.arctan(epsilon_select) * jnp.sin(jnp.pi * lambda_global) / jnp.pi)
 
     # lambda sub for `reff_lj`
-    lam_sub = unique_old * lambda_select * lambda_global + unique_new * lambda_select * (1. - lambda_global)
+    lam_sub = unique_old * lam_sub_select * lambda_global + unique_new * lam_sub_select * (1. - lambda_global)
     reff_lj = r/res_s + lam_sub
 
     # canonical softcore form/protect nans
@@ -313,7 +317,7 @@ class LambdaSelector(nn.Module):
         x = jnp.array([_lambda_global, unique_idx / (max_idx+1)]) # protect against nan
         spec_val = MLP(num_hidden_layers=self.num_hidden_layers, 
                        dense_features=self.dense_features, 
-                       output_dimension=1)(x)
+                       output_dimension=2)(x)
         return spec_val
 
 def make_lambda_selector_fn(max_idx: int,
@@ -332,14 +336,15 @@ def make_lambda_selector_fn(max_idx: int,
     def lambda_selector_fn(params, lambda_global, idx):
         # delineate whether model selection is happening on a per-particle basis or not
         in_idx = jax.lax.select(per_particle, idx, max_idx)
-        return model.apply(params, lambda_global, in_idx, max_idx).sum()**2
+        out_rev = model.apply(params, lambda_global, in_idx, max_idx)
+        return out_rev.at[0].set(out_rev[0]**2) # only the 0th entry must be positive, strictly
 
     # linearize the function
     if pre_linearize:
         def _loss_fn(params, lambda_global, idx):
-            learned_val = lambda_selector_fn(params, lambda_global, idx)
-            target_val = DEFAULT_SOFTCORE_PARAMETERS['softcore_alpha']
-            return (learned_val - target_val)**2
+            learned_vals = lambda_selector_fn(params, lambda_global, idx)
+            target_vals = jnp.array([DEFAULT_SOFTCORE_PARAMETERS['softcore_alpha'], 0.])
+            return jnp.sum((learned_vals - target_vals)**2)
 
         loss_over_idx = jax.vmap(_loss_fn, in_axes=(None, None, 0))
         loss_over_lam_glob = jax.vmap(loss_over_idx, in_axes=(None, 0, None))
@@ -388,7 +393,7 @@ def make_lj_V_ext(
 
     # make a selection function that replaces learned `lambda_select` with `lambda_global` if the solute is not unique 
     def lambda_select_modifier(lambda_select: jnp.array, uo1: int, un1: int, lambda_global: float, **unused_kwargs):
-        return jax.lax.select(jnp.isclose(uo1+un1, 0.), lambda_global, lambda_select)
+        return jax.lax.select(jnp.isclose(uo1+un1, 0.), lambda_global * jnp.ones(2), lambda_select)
 
     # create lambda selector_fn
     lambda_selector_fn, out_params, untrained_params, out_state = make_lambda_selector_fn(
