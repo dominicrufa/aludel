@@ -319,7 +319,8 @@ class LambdaSelector(nn.Module):
 def make_lambda_selector_fn(max_idx: int,
                             pre_linearize: bool=True, 
                             num_hidden_layers: int=1, 
-                            dense_features: int=32, 
+                            dense_features: int=32,
+                            per_particle: bool=True,
                             **unused_kwargs) -> Callable[[float, int, int], float]:
     """initialize and (maybe) pretrain an instance of `LambdaSelector`"""
     model = LambdaSelector(num_hidden_layers, dense_features)
@@ -329,7 +330,9 @@ def make_lambda_selector_fn(max_idx: int,
     
     # define the function
     def lambda_selector_fn(params, lambda_global, idx):
-        return model.apply(params, lambda_global, idx, max_idx).sum()**2
+        # delineate whether model selection is happening on a per-particle basis or not
+        in_idx = jax.lax.select(per_particle, idx, max_idx)
+        return model.apply(params, lambda_global, in_idx, max_idx).sum()**2
 
     # linearize the function
     if pre_linearize:
@@ -359,9 +362,13 @@ def make_lj_V_ext(
     softcore_parameters: Dict[str, float] = DEFAULT_SOFTCORE_PARAMETERS,
     pre_linearize: bool=True, 
     num_hidden_layers: int=1, 
-    dense_features: int=32, 
+    dense_features: int=32,
+    per_particle: bool=True,
     **unused_kwargs) -> Tuple[jnp.array, Callable[[jnp.array, float], Dict[str, jnp.array]], Callable[float, Dict[str, jnp.array]]]:
-    """create a function that generates parameters for the `V_ext` and return init y-axis knots for a cubic spline"""
+    """create a function that generates parameters for the `V_ext`;
+    `per_particle` determines whether a different `lambda_select` will be created for each unique particle. if `False`,
+    all unique particles will share the same `lambda_select`.
+    """
     num_unique_indices = len(identical_indices) # get the number of unique indices
     alch_hybrid_particles = np.sort(np.concatenate(identical_indices)) # sort all the alchemical hybrid particles
     
@@ -388,7 +395,8 @@ def make_lj_V_ext(
         max_idx = num_unique_indices-1,
         pre_linearize = pre_linearize, 
         num_hidden_layers = num_hidden_layers, 
-        dense_features = dense_features)
+        dense_features = dense_features,
+        per_particle = per_particle)
         
     # write function to generate `lambda_select`; xs are partialed out
     def V_ext_kwarg_generator(particle_idx: int, params: Dict[str, jnp.array], lambda_global: float, **unused_kwargs) -> Dict[str, jnp.array]:
@@ -615,19 +623,13 @@ def make_loss_and_aux(
         grid_sizes: jnp.array,
         n0: float,
         kT: float,
-        optimize_by_unique_particle: bool=True,
         **unused_kwargs) -> Tuple[Callable]:
     """a function to generate a loss function for parameter optimization;
     functions have to be re-wrapped to make them `scipy.integrate.quad_vec`-compatible
-    since an integral over `lambda_global` is needed to compute the loss and its derivative w.r.t. optimizable parameters;
-    `optimize_by_unique_particle` determines whether each particle will have its own protocol or whether
-    all particles will share a protocol."""
+    since an integral over `lambda_global` is needed to compute the loss and its derivative
+    w.r.t. optimizable parameters."""
     num_solute_particles = V_ext_R_array.shape[0]
     particle_indices = jnp.arange(num_solute_particles)
-    if not optimize_by_unique_particle: # take only protocol of 0th index
-        particle_indices = 0 * particle_indices
-
-
 
     # make params flatten/unflatten utils for `quad_vec`
     pytree_to_flat_params, flat_params_to_pytree = dict_to_array_utilities(initial_parameters_dict)
