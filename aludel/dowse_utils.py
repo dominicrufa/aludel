@@ -351,7 +351,7 @@ def make_lambda_selector_fn(max_idx: int,
         loss_fn = lambda params: loss_over_lam_glob(params, jnp.linspace(0, 1, 100), jnp.arange(0, max_idx+1)).sum()
         
         # optimizer
-        solver = jaxopt.LBFGS(loss_fn)
+        solver = jaxopt.ScipyMinimize(method='L-BFGS-B', fun=loss_fn)
         res = solver.run(untrained_params)
         out_params, out_state = res.params, res.state
     else:
