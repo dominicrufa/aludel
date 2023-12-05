@@ -184,7 +184,9 @@ def sc_v2(r, lambda_global, lambda_select, # radius, lambda_select
 
     # scaling sigma, epsilon by lambda_global
     res_s = os + lambda_global * (ns - os)
-    res_e = oe + lambda_global * (ne - oe) * (1. + 2. * (unique_old + unique_new) * jnp.arctan(epsilon_select) * jnp.sin(jnp.pi * lambda_global) / jnp.pi)
+
+    scale_res_e = 1. + 2.*jnp.arctan(epsilon_select * (unique_new*(1.-lambda_global) + lambda_global*unique_old))/jnp.pi
+    res_e = oe + lambda_global * (ne - oe) / scale_res_e
 
     # lambda sub for `reff_lj`
     lam_sub = unique_old * lam_sub_select * lambda_global + unique_new * lam_sub_select * (1. - lambda_global)
@@ -313,8 +315,10 @@ class LambdaSelector(nn.Module):
     dense_features: int=32
     
     @nn.compact
-    def __call__(self, _lambda_global, unique_idx, max_idx):
-        x = jnp.array([_lambda_global, unique_idx / (max_idx+1)]) # protect against nan
+    def __call__(self, _lambda_global, unique_idx_and_attr, max_idx):
+        unique_idx = unique_idx_and_attr[0]
+        attr = unique_idx_and_attr[1:]
+        x = jnp.array([_lambda_global, unique_idx / (max_idx+1), attr]) # protect against nan
         spec_val = MLP(num_hidden_layers=self.num_hidden_layers, 
                        dense_features=self.dense_features, 
                        output_dimension=2)(x)
@@ -333,7 +337,7 @@ def make_lambda_selector_fn(max_idx: int,
     try_out = model.apply(untrained_params, *inits) # run it for good measure
     
     # define the function
-    def lambda_selector_fn(params, lambda_global, idx):
+    def lambda_selector_fn(params, lambda_global, idx_and_attr):
         # delineate whether model selection is happening on a per-particle basis or not
         in_idx = jax.lax.select(per_particle, idx, max_idx)
         out_rev = model.apply(params, lambda_global, in_idx, max_idx)

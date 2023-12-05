@@ -135,8 +135,7 @@ class BaseSingleTopologyHybridSystemFactory(object):
         self._handle_constraints(**kwargs)
         self._handle_virtual_sites(**kwargs)
 
-        if self._hybrid_system.usesPeriodicBoundaryConditions():
-            self._copy_barostat(**kwargs)  # copy barostat
+        self._copy_barostat(**kwargs)  # copy barostat
 
         self._equip_hybrid_forces(**kwargs)
 
@@ -435,3 +434,15 @@ class SCRFSingleTopologyHybridSystemFactory(BaseSingleTopologyHybridSystemFactor
                     print(f"\t", _force.__class__.__name__, _energy)
 
         return [[old_es_sum, hybr_old_es_sum], [new_es_sum, hybr_new_es_sum]]
+
+    @property
+    def hybrid_system_sans_self(self):
+        """a copy of `hybrid_system` property, except the
+        iterate over the `self._hybrid_forces_dict` (nested) and add the forces to the `hybrid_system`"""
+        duplicate_hybrid_system = copy.deepcopy(self._hybrid_system)
+        for original_forcename, nested_force_dict in self._hybrid_forces_dict.items():
+            for hybrid_force_name, specifier_force_dict in nested_force_dict.items():
+                out_forces = [copy.deepcopy(x) for name, x in specifier_force_dict.items() if name != 'self'] #only mod
+                _ = [duplicate_hybrid_system.addForce(x) for x in out_forces]
+
+        return duplicate_hybrid_system
