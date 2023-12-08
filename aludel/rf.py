@@ -280,8 +280,8 @@ class SingleTopologyHybridNBFReactionFieldConverter():
     NB_STANDARD_REFF_TEMPLATE = ['reff_lj = r;', 'reff_q = r;']  # define the standard r-effectives
 
     NB_ALCH_REFF_TEMPLATE = [  # define the softcored r-effectives
-        'reff_lj = res_sigma*(({softcore_alpha}*(lam_sub) + (r/res_sigma)));',
-        'reff_q = res_sigma*(({softcore_beta}*(lam_sub) + (r/res_sigma)));']
+        'reff_lj = res_sigma*({softcore_alpha}*lam_sub + (r/res_sigma)^6 )^(1/6);',
+        'reff_q = {softcore_beta}*lam_sub + r;']
     NB_ALCH_LIFTING_SELECTOR = [
         'lam_sub = (unique_old * lambda_global) + (unique_new * (1. - lambda_global));',
         'unique_old = step(unique_old1 + unique_old2 - 0.1);',
