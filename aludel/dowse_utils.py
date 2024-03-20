@@ -118,9 +118,10 @@ def sc_lj(r, lambda_select, # radius, lambda_select
           softcore_b: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_b'], 
           softcore_c: float=DEFAULT_SOFTCORE_PARAMETERS['softcore_c'], # softcore parameters
           lj_switch: float=79., 
-          lj_max: float=99., 
+          lj_max: float=99.,
           **unused_kwargs) -> float: # max lj
     """define a softcore lennard jones potential"""
+    # pad r to avoid nan
 
     # uniques
     uo, un = uo1 + uo2, un1 + un2 # combiner for unique old/new

@@ -6,7 +6,7 @@
 #BSUB -q gpuqueue
 #BSUB -gpu num=1:j_exclusive=yes:mode=shared
 #BSUB -W  12:00
-#BSUB -m "ly-gpu lx-gpu lu-gpu ld-gpu lt-gpu"
+#BSUB -m "lj-gpu ll-gpu ln-gpu ly-gpu lx-gpu lu-gpu ld-gpu"
 ##BSUB -m "ls-gpu lg-gpu lt-gpu lp-gpu lg-gpu  ld-gpu"
 #BSUB -o out_%I.stdout
 ##BSUB -cwd "/scratch/%U/%J"
